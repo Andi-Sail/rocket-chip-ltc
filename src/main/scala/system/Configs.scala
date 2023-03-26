@@ -5,6 +5,7 @@ package freechips.rocketchip.system
 
 import org.chipsalliance.cde.config.Config
 import freechips.rocketchip.subsystem._
+import freechips.rocketchip.subsystem
 
 class WithJtagDTMSystem extends freechips.rocketchip.subsystem.WithJtagDTM
 class WithDebugSBASystem extends freechips.rocketchip.subsystem.WithDebugSBA
@@ -29,6 +30,8 @@ class DefaultFP16Config extends Config(new WithFP16 ++ new DefaultConfig)
 
 class BitManipCryptoConfig extends Config(new WithBitManip ++ new WithCryptoNIST ++ new WithCryptoSM ++ new DefaultConfig)
 class BitManipCrypto32Config extends Config(new WithBitManip ++ new WithCryptoNIST ++ new WithCryptoSM ++ new DefaultRV32Config)
+
+class HypervisorConfig extends Config(new WithHypervisor ++ new DefaultConfig)
 
 class DualBankConfig extends Config(new WithNBanks(2) ++ new DefaultConfig)
 class DualCoreConfig extends Config(new WithNBigCores(2) ++ new WithCoherentBusTopology ++ new BaseConfig)
@@ -92,3 +95,10 @@ class BaseFPGAConfig extends Config(new BaseConfig ++ new WithCoherentBusTopolog
 class DefaultFPGAConfig extends Config(new WithNSmallCores(1) ++ new BaseFPGAConfig)
 
 class CloneTileConfig extends Config(new WithCloneRocketTiles(7) ++ new WithNBigCores(1) ++ new WithCoherentBusTopology ++ new BaseConfig)
+
+class LTCConfig64 extends Config(new WithNSmallCores(1) ++ new BaseFPGAConfig ++ new WithRoccExample)
+class LTCConfig extends Config(new WithNSmallCores(1) ++ new WithRV32 ++ new BaseFPGAConfig ++ new WithRoccExample)
+class LTCConfigFPU extends Config(new WithNSmallCores32FPU(1) ++ new BaseFPGAConfig ++ new WithRoccExample)
+
+
+class LTCConfigRBB extends Config(new WithJtagDTMSystem ++ new LTCConfig)

@@ -180,6 +180,41 @@ class WithNSmallCores(
   }
 })
 
+class WithNSmallCores32FPU(
+  n: Int,
+  overrideIdOffset: Option[Int] = None,
+  crossing: RocketCrossingParams = RocketCrossingParams()
+) extends Config((site, here, up) => {
+  case XLen => 32
+  case TilesLocated(InSubsystem) => {
+    val prev = up(TilesLocated(InSubsystem), site)
+    val idOffset = overrideIdOffset.getOrElse(prev.size)
+    val small = RocketTileParams(
+      // core = RocketCoreParams(useVM = false, fpu = None),
+      core = RocketCoreParams(useVM = false, fpu = Some(FPUParams(fLen=32))),
+      btb = None,
+      dcache = Some(DCacheParams(
+        rowBits = site(SystemBusKey).beatBits,
+        nSets = 64,
+        nWays = 1,
+        nTLBSets = 1,
+        nTLBWays = 4,
+        nMSHRs = 0,
+        blockBytes = site(CacheBlockBytes))),
+      icache = Some(ICacheParams(
+        rowBits = site(SystemBusKey).beatBits,
+        nSets = 64,
+        nWays = 1,
+        nTLBSets = 1,
+        nTLBWays = 4,
+        blockBytes = site(CacheBlockBytes))))
+    List.tabulate(n)(i => RocketTileAttachParams(
+      small.copy(hartId = i + idOffset),
+      crossing
+    )) ++ prev
+  }
+})
+
 class With1TinyCore extends Config((site, here, up) => {
   case XLen => 32
   case TilesLocated(InSubsystem) => {
@@ -344,8 +379,8 @@ class WithRoccExample extends Config((site, here, up) => {
         accumulator
     },
     (p: Parameters) => {
-        val translator = LazyModule(new TranslatorExample(OpcodeSet.custom1)(p))
-        translator
+        val my_accumulator = LazyModule(new MyAccumulatorExample(OpcodeSet.custom1)(p))
+        my_accumulator
     },
     (p: Parameters) => {
         val counter = LazyModule(new CharacterCountExample(OpcodeSet.custom2)(p))

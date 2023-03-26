@@ -117,6 +117,107 @@ trait HasLazyRoCCModule extends CanHavePTWModule
   }
 }
 
+class MyAccumulatorExample(opcodes: OpcodeSet)(implicit p: Parameters) extends LazyRoCC(opcodes) {
+  override lazy val module = new MyAccumulatorExampleModuleImp(this)
+}
+
+class MyAccumulatorExampleModuleImp(outer: MyAccumulatorExample)(implicit p: Parameters) extends LazyRoCCModuleImp(outer)
+    with HasCoreParameters {
+  
+  val cmd = io.cmd // take it directly here, no Queue for now
+  
+  val base_address = Reg(UInt(xLen.W))
+  val size = Reg(UInt(xLen.W))
+  
+  val funct = cmd.bits.inst.funct
+  val s_idle :: s_rst :: s_acc :: s_resp :: Nil = Enum(4)
+  val state = RegInit(s_idle)
+
+  val doWork = state === s_acc
+  val doRead = state === s_resp
+
+  val offset = Reg(UInt(xLen.W))
+  val accu = Reg(UInt(xLen.W))
+
+  val mem_addr_valid = RegInit(false.B)
+  mem_addr_valid := false.B
+
+
+  val resp_rd = Reg(chiselTypeOf(io.resp.bits.rd))
+  val cmd_dprv = Reg(chiselTypeOf(cmd.bits.status.dprv))
+  val cmd_dv = Reg(chiselTypeOf(cmd.bits.status.dv))
+
+  when (cmd.fire) {
+    accu := 0.U
+    state := s_rst
+    offset := 0.U
+    base_address := cmd.bits.rs1
+    size := cmd.bits.rs2
+    resp_rd := io.cmd.bits.inst.rd
+    cmd_dprv := cmd.bits.status.dprv
+    cmd_dv := cmd.bits.status.dv
+    mem_addr_valid := true.B
+  }
+
+  when (state === s_rst) {
+    state := s_acc
+    mem_addr_valid := true.B
+  }
+
+  when (io.mem.resp.valid) {
+    when(offset >= size){
+      mem_addr_valid := false.B
+      state := s_resp
+    }.otherwise{
+      accu := accu + io.mem.resp.bits.data
+      
+      mem_addr_valid := true.B
+      offset := offset + 1.U
+    }
+  }
+  // when (io.mem.req.fire) {
+  //   when(offset >= size){
+  //   }.otherwise{
+  //     mem_addr_valid := true.B
+  //     offset := offset + 1.U
+  //   }
+  // }
+
+
+  io.resp.valid := state === s_resp
+  when (io.resp.fire) {
+    state := s_idle
+  }
+
+
+  val stallLoad = doWork && !io.mem.req.ready
+  val stallResp = doRead && !io.resp.ready
+
+  io.busy := state =/= s_idle
+  cmd.ready := !stallLoad && !stallResp && !io.busy // maybe add io.busy
+
+//  io.resp.bits.rd := cmd.bits.inst.rd // only works if cmd is queue
+  io.resp.bits.rd := resp_rd
+
+  io.resp.bits.data := accu
+
+  // MEMORY REQUEST INTERFACE
+  // io.mem.req.valid := cmd.valid && doWork && !stallReg && !stallResp
+  io.mem.req.valid := ( state === s_acc ) && mem_addr_valid // && !io.busy && !stallResp
+  io.mem.req.bits.addr := base_address + (offset << 2)
+  io.mem.req.bits.tag := 0.U
+  io.mem.req.bits.cmd := M_XRD // perform a load (M_XWR for stores)
+  io.mem.req.bits.size := log2Up(4).U // maybe already defined as default???
+  io.mem.req.bits.signed := false.B
+  io.mem.req.bits.data := 0.U // we're not performing any stores...
+  io.mem.req.bits.phys := false.B
+  io.mem.req.bits.dprv := cmd_dprv
+  io.mem.req.bits.dv := cmd_dv
+
+  io.interrupt := false.B
+}
+
+
 class AccumulatorExample(opcodes: OpcodeSet, val n: Int = 4)(implicit p: Parameters) extends LazyRoCC(opcodes) {
   override lazy val module = new AccumulatorExampleModuleImp(this)
 }
@@ -296,6 +397,7 @@ class CharacterCountExampleModuleImp(outer: CharacterCountExample)(implicit p: P
     count := 0.U
     finished := false.B
     state := s_acq
+    recv_beat := 0.U
   }
 
   when (tl_out.a.fire()) { state := s_gnt }
