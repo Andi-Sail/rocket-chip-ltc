@@ -124,28 +124,27 @@ class MyAccumulatorExample(opcodes: OpcodeSet)(implicit p: Parameters) extends L
 class MyAccumulatorExampleModuleImp(outer: MyAccumulatorExample)(implicit p: Parameters) extends LazyRoCCModuleImp(outer)
     with HasCoreParameters {
   
-  val cmd = io.cmd // take it directly here, no Queue for now
+  val cmd = io.cmd // take it directly here, no Queue for now - mybe Reg, or RegEnable would be good
+
   
   val base_address = Reg(UInt(xLen.W))
   val size = Reg(UInt(xLen.W))
   
   val funct = cmd.bits.inst.funct
-  val s_idle :: s_rst :: s_acc :: s_resp :: Nil = Enum(4)
+  val s_idle :: s_rst :: s_acc :: s_waitLast :: s_resp :: Nil = Enum(5)
   val state = RegInit(s_idle)
 
   val doWork = state === s_acc
-  val doRead = state === s_resp
+  val doResp = state === s_resp
 
   val offset = Reg(UInt(xLen.W))
   val accu = Reg(UInt(xLen.W))
 
-  val mem_addr_valid = RegInit(false.B)
-  mem_addr_valid := false.B
-
-
   val resp_rd = Reg(chiselTypeOf(io.resp.bits.rd))
   val cmd_dprv = Reg(chiselTypeOf(cmd.bits.status.dprv))
   val cmd_dv = Reg(chiselTypeOf(cmd.bits.status.dv))
+
+  val req_addr_valid = RegInit(false.B) // only really necessary if addess is updated on respons (see Note below)
 
   when (cmd.fire) {
     accu := 0.U
@@ -156,32 +155,34 @@ class MyAccumulatorExampleModuleImp(outer: MyAccumulatorExample)(implicit p: Par
     resp_rd := io.cmd.bits.inst.rd
     cmd_dprv := cmd.bits.status.dprv
     cmd_dv := cmd.bits.status.dv
-    mem_addr_valid := true.B
   }
 
   when (state === s_rst) {
     state := s_acc
-    mem_addr_valid := true.B
+    req_addr_valid := true.B
   }
 
   when (io.mem.resp.valid) {
-    when(offset >= size){
-      mem_addr_valid := false.B
+    accu := accu + io.mem.resp.bits.data
+    when(io.mem.resp.bits.addr === (base_address + ((size-1.U) << 2))){  // TODO: not so nice to do addr computation here
       state := s_resp
-    }.otherwise{
-      accu := accu + io.mem.resp.bits.data
-      
-      mem_addr_valid := true.B
-      offset := offset + 1.U
     }
   }
-  // when (io.mem.req.fire) {
-  //   when(offset >= size){
-  //   }.otherwise{
-  //     mem_addr_valid := true.B
-  //     offset := offset + 1.U
-  //   }
-  // }
+
+  when (io.mem.req.fire) {
+    req_addr_valid := false.B
+  }
+
+  // when (io.mem.req.fire && (state === s_acc)) {
+  when (io.mem.resp.valid && (state === s_acc)) { // NOTE: only update on response, b.c. on request does not work somehow
+    when(offset === (size-1.U)){
+      // state := s_waitLast
+      state := s_resp // Note: if changed on request, this shoudl be waitLast
+    }.otherwise{
+      offset := offset + 1.U
+      req_addr_valid := true.B
+    }
+  }
 
 
   io.resp.valid := state === s_resp
@@ -191,7 +192,7 @@ class MyAccumulatorExampleModuleImp(outer: MyAccumulatorExample)(implicit p: Par
 
 
   val stallLoad = doWork && !io.mem.req.ready
-  val stallResp = doRead && !io.resp.ready
+  val stallResp = doResp && !io.resp.ready
 
   io.busy := state =/= s_idle
   cmd.ready := !stallLoad && !stallResp && !io.busy // maybe add io.busy
@@ -203,7 +204,7 @@ class MyAccumulatorExampleModuleImp(outer: MyAccumulatorExample)(implicit p: Par
 
   // MEMORY REQUEST INTERFACE
   // io.mem.req.valid := cmd.valid && doWork && !stallReg && !stallResp
-  io.mem.req.valid := ( state === s_acc ) && mem_addr_valid // && !io.busy && !stallResp
+  io.mem.req.valid := ( state === s_acc ) && req_addr_valid
   io.mem.req.bits.addr := base_address + (offset << 2)
   io.mem.req.bits.tag := 0.U
   io.mem.req.bits.cmd := M_XRD // perform a load (M_XWR for stores)
