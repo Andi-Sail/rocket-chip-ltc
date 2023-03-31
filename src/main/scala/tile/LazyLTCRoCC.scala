@@ -12,6 +12,15 @@ import org.chipsalliance.cde.config._
 import freechips.rocketchip.rocket._
 // import freechips.rocketchip.tilelink._
 
+import chisel3.experimental.FixedPoint
+
+// import breeze.linalg._
+import breeze.{linalg => blinag}
+// import breeze.numerics._
+import breeze.{numerics => bnumerics}
+
+import scala.math._
+
 
 /**
  * Accumulator Example
@@ -123,11 +132,75 @@ class MyAccumulatorExampleModuleImp(outer: MyAccumulatorExample)(implicit p: Par
   * LTC Accelerator 
   */
 
-class LTCUnit extends Module {
+class LTCUnit(val w: Int = 32, val f: Int = 16, val maxNeurons: Int = 256) extends Module {
   val io = IO(new Bundle {
       val in = Input(UInt(16.W))
       val out = Output(UInt(16.W))
+
+      // val j           = Input(UInt(log2Ceil(maxNeurons).W)) 
+      // val neuron_done = Input(Bool())
+      // val x_z1        = Input(FixedPoint(w.W, f.BP))
+      // val k           = Input(UInt((log2Ceil(maxNeurons) * 2).W))
+      // val fire        = Input(Bool())
+
+      // val busy    = Output(Bool())
+      // val done    = Output(Bool())
+      // val act     = Output(FixedPoint(w.W, f.BP))
+      // val rev_act = Output(FixedPoint(w.W, f.BP))
+      // val valid   = Output(Bool())
   })
 
   io.out := RegNext(io.in)
+}
+
+class HardSigmoid(val w: Int = 32, val f: Int = 16, lut_len: Int = 64, e_max: Double = 0.001) extends Module {
+  
+  // translated from python GenerateSigmoidErrorLut.py (thanks ChatGTP!)
+  def getErrorLUT() : (Array[Double], Double, Double) = {
+    // %% generate correct sigmoid
+    val x = blinag.linspace(-10.0, 10.0, 100000)
+    val sigmoid_f = (x: blinag.DenseVector[Double]) => 1.0 / (bnumerics.exp(-x) + 1.0)
+    // val sigmoid = sigmoid_f(x)
+
+    // %% generate hard sigmoid
+    val hard_sigmoid_f = (x: blinag.DenseVector[Double]) => {
+        x.map(v => {
+            if (v < -2) {
+                0.0
+            } else if (v > 2) {
+                1.0
+            } else {
+                0.25 * v + 0.5
+            }
+        })
+    }
+    // val hard_sigmoid = hard_sigmoid_f(x)
+
+    // %% compute error
+    val error_f = (x: blinag.DenseVector[Double]) => sigmoid_f(x) - hard_sigmoid_f(x)
+    val error = error_f(x)
+
+    // %% determine range for LUT
+    val lut_range = blinag.DenseVector.range(0, error.length).findAll(i => -error(i) > e_max)
+    val x_min = x(lut_range(0))
+    val x_max = x(lut_range(lut_range.length-1))
+
+    // %% determine x values for LUT
+    val x_lut = blinag.linspace(x_min, x_max, lut_len)
+
+    // %% comput erros for LUT
+    val error_lut = -error_f(x_lut)
+
+    return (error_lut.data, x_min, x_max)
+  }
+
+  val (error_lut_d, x_min_d, x_max_d) = getErrorLUT()
+  val error_lut_quant = error_lut_d.map(x => round(x*pow(2.0d,f)).toInt)
+  val max_entry = blinag.max(blinag.DenseVector[Int](error_lut_quant))
+  val rom_bit_w = log2Ceil(max_entry)
+  val rom_lut_memory_bits = rom_bit_w * lut_len
+  println(s"using $rom_bit_w bits for $lut_len entries in Sigmoid Error LUT --> LUT requires $rom_lut_memory_bits bits")
+  println(s"Correcting Error in the range from $x_min_d to $x_max_d")
+
+  val rom_lut = VecInit(error_lut_quant.map(_.U(rom_bit_w.W)))
 }
