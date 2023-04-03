@@ -153,8 +153,13 @@ class LTCUnit(val w: Int = 32, val f: Int = 16, val maxNeurons: Int = 256) exten
   io.out := RegNext(io.in)
 }
 
-class HardSigmoid(val w: Int = 32, val f: Int = 16, lut_len: Int = 64, e_max: Double = 0.001) extends Module {
+class HardSigmoid(val w: Int = 32, val f: Int = 16, lut_addr_w: Int = 6) extends Module {
   
+  val lut_len : Int = pow(2, lut_addr_w).toInt
+  val step_size : Double = 8.0/lut_len
+
+  require(lut_len >= 8, s"HardSigmoid lut_len must be >= 8 - lut_len is $lut_len with lut_addr_w $lut_addr_w")
+
   // translated from python GenerateSigmoidErrorLut.py (thanks ChatGTP!)
   def getErrorLUT() : (Array[Double], Double, Double) = {
     // %% generate correct sigmoid
@@ -180,10 +185,9 @@ class HardSigmoid(val w: Int = 32, val f: Int = 16, lut_len: Int = 64, e_max: Do
     val error_f = (x: blinag.DenseVector[Double]) => sigmoid_f(x) - hard_sigmoid_f(x)
     val error = error_f(x)
 
-    // %% determine range for LUT
-    val lut_range = blinag.DenseVector.range(0, error.length).findAll(i => -error(i) > e_max)
-    val x_min = x(lut_range(0))
-    val x_max = x(lut_range(lut_range.length-1))
+    // %% determine range for LUT (is fixed to interval [0,8) )
+    val x_min = 0.0
+    val x_max = 8.0 - step_size
 
     // %% determine x values for LUT
     val x_lut = blinag.linspace(x_min, x_max, lut_len)
@@ -202,5 +206,6 @@ class HardSigmoid(val w: Int = 32, val f: Int = 16, lut_len: Int = 64, e_max: Do
   println(s"using $rom_bit_w bits for $lut_len entries in Sigmoid Error LUT --> LUT requires $rom_lut_memory_bits bits")
   println(s"Correcting Error in the range from $x_min_d to $x_max_d")
 
+  val lut_x_shift = lut_addr_w-3 // b.c. fixed x_max of 8
   val rom_lut = VecInit(error_lut_quant.map(_.U(rom_bit_w.W)))
 }
