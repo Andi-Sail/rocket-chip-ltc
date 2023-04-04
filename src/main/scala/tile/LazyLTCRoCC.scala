@@ -154,7 +154,11 @@ class LTCUnit(val w: Int = 32, val f: Int = 16, val maxNeurons: Int = 256) exten
 }
 
 class HardSigmoid(val w: Int = 32, val f: Int = 16, lut_addr_w: Int = 6) extends Module {
-  
+    val io = IO(new Bundle {
+      val x = Input(FixedPoint(w.W, f.BP))
+      val y = Output(FixedPoint(w.W, f.BP))
+    })
+
   val lut_len : Int = pow(2, lut_addr_w).toInt
   val step_size : Double = 8.0/lut_len
 
@@ -198,6 +202,7 @@ class HardSigmoid(val w: Int = 32, val f: Int = 16, lut_addr_w: Int = 6) extends
     return (error_lut.data, x_min, x_max)
   }
 
+  // generate and quantize error LUT
   val (error_lut_d, x_min_d, x_max_d) = getErrorLUT()
   val error_lut_quant = error_lut_d.map(x => round(x*pow(2.0d,f)).toInt)
   val max_entry = blinag.max(blinag.DenseVector[Int](error_lut_quant))
@@ -208,4 +213,41 @@ class HardSigmoid(val w: Int = 32, val f: Int = 16, lut_addr_w: Int = 6) extends
 
   val lut_x_shift = lut_addr_w-3 // b.c. fixed x_max of 8
   val rom_lut = VecInit(error_lut_quant.map(_.U(rom_bit_w.W)))
+
+  val x_sign = (io.x > FixedPoint(0, w.W, f.BP))
+  val x_sign_shrg = ShiftRegister(x_sign, 2, true.B)
+
+  // linear interpolation
+  val y_interpolated_raw = (io.x >> 2) + FixedPoint.fromDouble(0.5, w.W, f.BP)
+  val y_interpolated = MuxCase(
+    y_interpolated_raw, // default
+    Array(
+      (io.x < FixedPoint.fromDouble(-2.0, w.W, f.BP)) -> FixedPoint.fromDouble(0.0, w.W, f.BP),
+      (io.x > FixedPoint.fromDouble(+2.0, w.W, f.BP)) -> FixedPoint.fromDouble(1.0, w.W, f.BP)
+      )
+    )
+  val y_interpolated_shrg = ShiftRegister(y_interpolated, 2, true.B)
+
+  // error correction
+  val x_abs = io.x.abs()
+
+  def getErrorLutAddr(x : FixedPoint ) : UInt = {
+    val addr = (x.asUInt >> (f - lut_x_shift).asUInt) + ((x.asUInt)(f - lut_x_shift -1))
+    Mux((x >= FixedPoint.fromDouble(8.0, w.W, f.BP)), 0.U, addr)
+  }
+
+  val addr = Reg(UInt(lut_addr_w.W))
+  addr := getErrorLutAddr(x_abs)
+  val e_reg = Reg(FixedPoint(w.W, f.BP))
+  val e = Wire(UInt(w.W))
+  e := rom_lut(addr)
+  e_reg := e.asFixedPoint(f.BP) 
+  printf(cf"addr = $addr - e = $e \n")
+
+  // output
+  io.y := Mux(
+        x_sign_shrg, 
+          y_interpolated_shrg - e_reg, 
+          y_interpolated_shrg + e_reg
+      )
 }
