@@ -66,56 +66,72 @@ class SigmoidLUTTest extends AnyFlatSpec with ChiselScalatestTester {
 
 class SigmoidImplTest extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "HardSigmoid" 
-  it should "compute the correct hard sigmoid with 2cc latency" in {
-    val W = 32
-    val F = 16
-    test(
-      new HardSigmoid(w=W, f=F, lut_addr_w=6), 
-      ).withAnnotations(Seq(
-        WriteVcdAnnotation, 
-        // treadle.WriteVcdAnnotation,
-        // treadle.VcdShowUnderScoredAnnotation,
-        treadle.WriteCoverageCSVAnnotation,
-        // treadle.MemoryToVCD("all"),
-        // PrintFullStackTraceAnnotation
-        )) { c =>
-        // stimuli and expected generated with python3 -i GenerateSigmoidErrorLut.py -la 6 (and exporting stim16 and exp16)
-        val test_len = 100
-        val stim = Array(39738,-213402,238796,231750,168498,93508,261338,-29564,62583,-180342,-6678,-158233,-131515,411298,-229534,-46142,-44557,47794,-208491,15337,427985,229908,-214443,-34821,-155064,-171932,196854,-332304,150035,-248300,-119194,202658,-63730,144727,-23916,-590807,-287550,-55807,-169720,-52184,76898,32728,251458,-432450,48529,-69367,-190420,-208039,-1686,234628,-142221,158842,144539,-210985,124011,6807,60530,22420,249368,590686,114904,204085,51106,-14010,102236,-65699,-56394,75922,-120045,35145,103237,62613,-45133,174036,-242747,-26160,39384,-155967,317395,-26930,31747,209489,-534222,-232475,169520,-243268,-154981,-131543,388610,-367911,-248821,407257,98385,-28296,107575,-397886,-272620,-384953,-252959,250983)
-        val exp = Array(42381,2446,63835,63615,61109,53159,64357,25544,47172,3938,31101,5577,7812,65410,1921,21777,21949,44171,2758,36581,65438,63615,2446,24229,5577,4427,62428,387,59287,1506,9635,62778,18076,59287,26860,0,815,19666,4427,20267,50266,40783,64203,87,44355,16667,3500,2758,32346,63835,6992,59959,59287,2446,57104,34466,47050,38302,64030,65536,55888,62778,44999,29286,54564,17584,19519,50022,9422,41387,53939,47180,22029,61109,1506,26299,42293,5577,65039,26106,40537,63090,0,1921,61109,1506,5577,7812,65352,236,1506,65410,53601,25765,55023,143,1042,184,1333,64203)
 
-        var act_in  = FixedPoint(0, W.W, F.BP)
-        var exp_out = FixedPoint(0, W.W, F.BP)
-        var act_out = FixedPoint(0, W.W, F.BP)
+  val stims = Array(
+    // fix8 stimuli and expected generated with python3 -i GenerateSigmoidErrorLut.py -la 7 (and exporting stim8 and exp8)
+    Array(-539,-1720,784,935,-400,207,-302,-422,-1179,753,683,325,-616,-2499,1171,12,-150,-248,272,-119,-911,340,-717,1739,-1400,-1911,-1530,-761,1129,-76,979,-520,315,-13,25,162,298,-683,-1131,-561,384,-101,-534,820,-532,741,536,671,1550,198,219,1745,-378,908,587,901,376,1484,11,-734,-527,767,238,611,66,316,-1940,508,-236,-87,1147,429,-214,1001,-315,683,469,-1187,-676,365,-1355,1351,-508,-140,-325,-516,-1223,807,155,552,860,-369,1376,564,-98,-688,430,408,-1679,-239),
+    // fix16 stimuli and expected generated with python3 -i GenerateSigmoidErrorLut.py -la 6 (and exporting stim16 and exp16)
+    Array(39738,-213402,238796,231750,168498,93508,261338,-29564,62583,-180342,-6678,-158233,-131515,411298,-229534,-46142,-44557,47794,-208491,15337,427985,229908,-214443,-34821,-155064,-171932,196854,-332304,150035,-248300,-119194,202658,-63730,144727,-23916,-590807,-287550,-55807,-169720,-52184,76898,32728,251458,-432450,48529,-69367,-190420,-208039,-1686,234628,-142221,158842,144539,-210985,124011,6807,60530,22420,249368,590686,114904,204085,51106,-14010,102236,-65699,-56394,75922,-120045,35145,103237,62613,-45133,174036,-242747,-26160,39384,-155967,317395,-26930,31747,209489,-534222,-232475,169520,-243268,-154981,-131543,388610,-367911,-248821,407257,98385,-28296,107575,-397886,-272620,-384953,-252959,250983)
+  )
+  val exps =  Array(
+    Array(27,0,245,249,44,176,60,40,2,243,240,200,21,0,253,131,91,71,190,98,7,203,15,256,1,0,1,12,253,109,250,29,197,124,134,167,194,16,3,26,209,102,29,246,29,242,229,239,255,175,179,256,48,249,233,248,207,255,130,14,29,244,183,234,144,198,0,224,73,106,253,215,77,251,58,240,221,2,17,206,1,255,32,94,55,31,2,245,165,230,248,48,255,230,103,16,215,212,0,72),
+    Array(42381,2446,63835,63615,61109,53159,64357,25544,47172,3938,31101,5577,7812,65410,1921,21777,21949,44171,2758,36581,65438,63615,2446,24229,5577,4427,62428,387,59287,1506,9635,62778,18076,59287,26860,0,815,19666,4427,20267,50266,40783,64203,87,44355,16667,3500,2758,32346,63835,6992,59959,59287,2446,57104,34466,47050,38302,64030,65536,55888,62778,44999,29286,54564,17584,19519,50022,9422,41387,53939,47180,22029,61109,1506,26299,42293,5577,65039,26106,40537,63090,0,1921,61109,1506,5577,7812,65352,236,1506,65410,53601,25765,55023,143,1042,184,1333,64203)
+  )
 
-        // assuming 2 cc latency: x -> y
-        c.clock.step() // step reset
-        c.io.x.poke(FixedPoint(stim(0), W.W, F.BP))
-        c.clock.step()
-        c.io.x.poke(FixedPoint(stim(1), W.W, F.BP))
-        c.clock.step()
-        for ( i <- 2 until test_len)
-        {
-          act_in  = FixedPoint(stim(i-2), W.W, F.BP)
-          exp_out = FixedPoint(exp(i-2), W.W, F.BP)
-          act_out = c.io.y.peek()
-          println(s"cycle: $i - Exp: $exp_out - Act: $act_out - In: $act_in")
-          c.io.y.expect(FixedPoint(exp(i-2), W.W, F.BP), s"missmach at index: $i")
-          c.io.x.poke(FixedPoint(stim(i), W.W, F.BP))
+  val fix_configs = Array(8,16)
+  val lut_addr_w_configs = Array(7,6)
+
+  val test_len = 100
+
+  for (config_index <- 0 until 1)
+  {
+    val fix = fix_configs(config_index)
+    val lut_addr_config = lut_addr_w_configs(config_index)
+    it should s"compute hard sigmoid with fix$fix - config $config_index" in {
+      val W = fix*2
+      val F = fix
+      test(
+        new HardSigmoid(w=W, f=F, lut_addr_w=lut_addr_config), 
+        ).withAnnotations(Seq(
+          WriteVcdAnnotation, 
+          treadle.WriteCoverageCSVAnnotation,
+          )) { c =>
+
+          val stim = stims(config_index)
+          val exp = exps(config_index)
+
+          var act_in  = FixedPoint(0, W.W, F.BP)
+          var exp_out = FixedPoint(0, W.W, F.BP)
+          var act_out = FixedPoint(0, W.W, F.BP)
+  
+          // assuming 2 cc latency: x -> y
+          c.clock.step() // step reset
+          c.io.x.poke(FixedPoint(stim(0), W.W, F.BP))
           c.clock.step()
-        }
-        act_in  = FixedPoint(stim(test_len-2), W.W, F.BP)
-        exp_out = FixedPoint(exp(test_len-2), W.W, F.BP)
-        act_out = c.io.y.peek()
-        println(s"cycle: last-1 - Exp: $exp_out - Act: $act_out - In: $act_in")
-        c.io.y.expect(FixedPoint(exp(test_len-2), W.W, F.BP), s"missmach at index: last-1")
-        c.clock.step()
-        act_in  = FixedPoint(stim(test_len-1), W.W, F.BP)
-        exp_out = FixedPoint(exp(test_len-1), W.W, F.BP)
-        act_out = c.io.y.peek()
-        println(s"cycle: last - Exp: $exp_out - Act: $act_out - In: $act_in")
-        c.io.y.expect(FixedPoint(exp(test_len-1), W.W, F.BP), s"missmach at index: last")
-
+          c.io.x.poke(FixedPoint(stim(1), W.W, F.BP))
+          c.clock.step()
+          for ( i <- 2 until test_len)
+          {
+            act_in  = FixedPoint(stim(i-2), W.W, F.BP)
+            exp_out = FixedPoint(exp(i-2), W.W, F.BP)
+            act_out = c.io.y.peek()
+            // println(s"cycle: $i - Exp: $exp_out - Act: $act_out - In: $act_in")
+            c.io.y.expect(FixedPoint(exp(i-2), W.W, F.BP), s"missmach at index: $i")
+            c.io.x.poke(FixedPoint(stim(i), W.W, F.BP))
+            c.clock.step()
+          }
+          act_in  = FixedPoint(stim(test_len-2), W.W, F.BP)
+          exp_out = FixedPoint(exp(test_len-2), W.W, F.BP)
+          act_out = c.io.y.peek()
+          // println(s"cycle: last-1 - Exp: $exp_out - Act: $act_out - In: $act_in")
+          c.io.y.expect(FixedPoint(exp(test_len-2), W.W, F.BP), s"missmach at index: last-1")
+          c.clock.step()
+          act_in  = FixedPoint(stim(test_len-1), W.W, F.BP)
+          exp_out = FixedPoint(exp(test_len-1), W.W, F.BP)
+          act_out = c.io.y.peek()
+          // println(s"cycle: last - Exp: $exp_out - Act: $act_out - In: $act_in")
+          c.io.y.expect(FixedPoint(exp(test_len-1), W.W, F.BP), s"missmach at index: last")
+      }
     }
   }
 }

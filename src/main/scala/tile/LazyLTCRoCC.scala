@@ -242,7 +242,7 @@ class HardSigmoid(val w: Int = 32, val f: Int = 16, lut_addr_w: Int = 6) extends
   val e = Wire(UInt(w.W))
   e := rom_lut(addr)
   e_reg := e.asFixedPoint(f.BP) 
-  printf(cf"addr = $addr - e = $e \n")
+  // printf(cf"addr = $addr - e = $e \n")
 
   // output
   io.y := Mux(
