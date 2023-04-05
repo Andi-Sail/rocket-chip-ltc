@@ -83,7 +83,7 @@ class SigmoidImplTest extends AnyFlatSpec with ChiselScalatestTester {
 
   val test_len = 100
 
-  for (config_index <- 0 until 1)
+  for (config_index <- 0 until 2)
   {
     val fix = fix_configs(config_index)
     val lut_addr_config = lut_addr_w_configs(config_index)
@@ -139,17 +139,40 @@ class SigmoidImplTest extends AnyFlatSpec with ChiselScalatestTester {
 class BasicTest extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "LTCUnit"
   // test class body here
-  it should "do something" in {
-    // test case body here
-    test(new LTCUnit) { c =>
-    // test body here
-      c.io.in.poke(0.U)
+  it should "activate done according N_out_neurons " in {
+    val N_out_neurons_test = 14
+    test(new LTCUnit).withAnnotations(Seq(WriteVcdAnnotation)) { c =>
+      c.clock.step() // step reset
+      c.io.j.poke(0.U)
+      
+      // write some value to N_out_neurons_write
+      c.io.N_out_neurons_write.bits.poke(N_out_neurons_test.U)
+      c.io.N_out_neurons_write.valid.poke(true.B)
       c.clock.step()
-      c.io.out.expect(0.U)
-      c.io.in.poke(42.U)
+      c.io.N_out_neurons_write.bits.poke(42.U)
+      c.io.N_out_neurons_write.valid.poke(false.B)
+      // check done is low
+      c.io.done.expect(false.B, s"done is set before anything happens")
+      
+      // step and increment j until j > N_out_neurons
+      for (j <- 0 until N_out_neurons_test)
+      {
+        c.io.j.poke(j.U)
+        c.clock.step()
+        c.io.done.expect(false.B, s"done is set before j reaches max $N_out_neurons_test - j is only at $j")
+      }
+      c.io.j.poke(N_out_neurons_test.U) // now done should be set internally - wait latency now
+      // check done is low until 9+2 steps later
+      for (i <- 0 until 9+2)
+      {
+        c.clock.step()
+        c.io.done.expect(false.B, s"done is set before latency is over - only waited $i cc")
+      }
+
+      // check done is high
       c.clock.step()
-      c.io.out.expect(42.U)
-      println("Last output value :" + c.io.out.peek().litValue)
+      c.io.done.expect(true.B, s"done is not set when expected at the end")
+
     }
   }
 }

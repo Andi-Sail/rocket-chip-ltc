@@ -132,33 +132,77 @@ class MyAccumulatorExampleModuleImp(outer: MyAccumulatorExample)(implicit p: Par
   * LTC Accelerator 
   */
 
-class LTCUnit(val w: Int = 32, val f: Int = 16, val maxNeurons: Int = 256) extends Module {
+object LTCUnit_WriteSel extends ChiselEnum {
+  val sparcity_matrix, mu, gamma, w, erev = Value
+}
+
+class LTCUnit_MemWrite(val w: Int, val ramBlockArrdWidth : Int) extends Bundle {
+  val writeSelect = LTCUnit_WriteSel()
+  val writeAddr = Bits(ramBlockArrdWidth.W)
+  val writeData = Bits(w.W)
+}
+
+class LTCUnit(  val w: Int = 32, val f: Int = 16, 
+                val maxNeurons: Int = 256, 
+                val ramBlockArrdWidth : Int = 9
+              ) extends Module {
+  val neuronCounterWidth = log2Ceil(maxNeurons)
   val io = IO(new Bundle {
-      val in = Input(UInt(16.W))
-      val out = Output(UInt(16.W))
 
-      // val j           = Input(UInt(log2Ceil(maxNeurons).W)) 
-      // val neuron_done = Input(Bool())
-      // val x_z1        = Input(FixedPoint(w.W, f.BP))
-      // val k           = Input(UInt((log2Ceil(maxNeurons) * 2).W))
-      // val fire        = Input(Bool())
+      val j           = Input(UInt(neuronCounterWidth.W)) 
+      val neuron_done = Input(Bool())
+      val x_z1        = Input(FixedPoint(w.W, f.BP))
+      val k           = Input(UInt((neuronCounterWidth * 2).W))
+      val fire        = Input(Bool())
 
-      // val busy    = Output(Bool())
-      // val done    = Output(Bool())
-      // val act     = Output(FixedPoint(w.W, f.BP))
-      // val rev_act = Output(FixedPoint(w.W, f.BP))
-      // val valid   = Output(Bool())
+      val busy    = Output(Bool())
+      val done    = Output(Bool())
+      val act     = Output(FixedPoint(w.W, f.BP))
+      val rev_act = Output(FixedPoint(w.W, f.BP))
+      val valid   = Output(Bool())
+
+      val N_out_neurons_write = Flipped(Valid(UInt(neuronCounterWidth.W)))
+      val mem_write = Flipped(Valid(new LTCUnit_MemWrite(w, ramBlockArrdWidth))) // should be an input 😕
   })
 
-  io.out := RegNext(io.in)
+  // component instantiation
+  val sigmoid = Module(new HardSigmoid(w, f)) // TODO add sigmoid lut_addr_w --> maybe define LTC Proc config in general somewhere, like rocket config
+
+  // TODO: shoudl be removed in the end!
+  // default assigment to remove errors during development 
+  io <> DontCare
+  sigmoid.io <> DontCare
+
+
+  val N_out_neurons = RegEnable(io.N_out_neurons_write.bits, 0.U, io.N_out_neurons_write.valid)
+
+  var weight_memories : Map[LTCUnit_WriteSel.Type, SyncReadMem[FixedPoint] ] = Map()
+  // memory definition
+  LTCUnit_WriteSel.all.foreach{
+    m => weight_memories += (m -> SyncReadMem(pow(2, ramBlockArrdWidth).toInt, FixedPoint(w.W, f.BP)))
+  }
+
+  // memory write 
+  when(io.mem_write.fire) {
+    switch (io.mem_write.bits.writeSelect) {
+      // is()
+    }
+  }
+
+  // event signals
+  val done_shrg = ShiftRegister((io.j >= N_out_neurons), 9+sigmoid.LATENCY)
+
+  // output
+  io.done := done_shrg
 }
 
 class HardSigmoid(val w: Int = 32, val f: Int = 16, lut_addr_w: Int = 6) extends Module {
-    val io = IO(new Bundle {
-      val x = Input(FixedPoint(w.W, f.BP))
-      val y = Output(FixedPoint(w.W, f.BP))
-    })
+  val io = IO(new Bundle {
+    val x = Input(FixedPoint(w.W, f.BP))
+    val y = Output(FixedPoint(w.W, f.BP))
+  })
 
+  val LATENCY : Int = 2
   val lut_len : Int = pow(2, lut_addr_w).toInt
   val step_size : Double = 8.0/lut_len
 
