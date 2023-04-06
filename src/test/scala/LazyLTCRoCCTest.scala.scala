@@ -168,7 +168,7 @@ class LTCUnit_Datapath_test extends AnyFlatSpec with ChiselScalatestTester {
       }
       c.io.j.poke(N_out_neurons_test.U) // now last_neuron should be set internally - wait latency now
       // check done is low until 9+2 steps later
-      for (i <- 0 until 9+2)
+      for (i <- 0 until 9+c.sigmoid.LATENCY)
       { // TODO: to be checked again after datapath is implemented 🤨
         c.io.done.expect(false.B, s"done is set before latency is over - only waited $i cc")
         c.clock.step()
@@ -194,7 +194,12 @@ class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
       c.io.en.poke(false.B) // disable LTC Unit
       c.io.j.poke(0.U)
       
-
+      c.io.k.poke(0.U)
+      for ( i <- 0 until 10)
+      {
+        c.io.k.poke(i.U)
+        c.clock.step()
+      }
     }
   }
 }

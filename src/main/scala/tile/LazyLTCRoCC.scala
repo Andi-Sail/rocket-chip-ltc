@@ -132,14 +132,19 @@ class MyAccumulatorExampleModuleImp(outer: MyAccumulatorExample)(implicit p: Par
   * LTC Accelerator 
   */
 
-object LTCUnit_WriteSel extends ChiselEnum {
-  val sparcity_matrix, mu, gamma, w, erev = Value
+object LTCUnit_MemSel extends ChiselEnum {
+  val mu, gamma, w, erev = Value
 }
 
-class LTCUnit_MemWrite(val w: Int, val ramBlockArrdWidth : Int) extends Bundle {
-  val writeSelect = LTCUnit_WriteSel()
-  val writeAddr = Bits(ramBlockArrdWidth.W)
+class LTCUnit_MemWrite(val w: Int, val addrWidth : Int) extends Bundle {
+  val writeSelect = LTCUnit_MemSel()
+  val writeAddr = Bits(addrWidth.W)
   val writeData = Bits(w.W)
+}
+
+class LTCUnit_SparcityMatWrite(val addrWidth : Int) extends Bundle {
+  val writeAddr = Bits(addrWidth.W)
+  val writeData = Bool()
 }
 
 class LTCUnit(  val w: Int = 32, val f: Int = 16, 
@@ -147,23 +152,27 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
                 val ramBlockArrdWidth : Int = 9
               ) extends Module {
   val neuronCounterWidth = log2Ceil(maxNeurons)
+  val maxSynapses = pow(maxNeurons, 2).toInt
+  val synapseCounterWidth = log2Ceil(maxSynapses)
   val io = IO(new Bundle {
 
       val en          = Input(Bool())
       val j           = Input(UInt(neuronCounterWidth.W)) 
       val neuron_done = Input(Bool())
       val x_z1        = Input(FixedPoint(w.W, f.BP))
-      val k           = Input(UInt((neuronCounterWidth * 2).W))
+      val k           = Input(UInt(synapseCounterWidth.W))
       val fire        = Input(Bool())
 
       val busy    = Output(Bool())
       val done    = Output(Bool())
       val act     = Output(FixedPoint(w.W, f.BP))
       val rev_act = Output(FixedPoint(w.W, f.BP))
+
       val valid   = Output(Bool())
 
       val N_out_neurons_write = Flipped(Valid(UInt(neuronCounterWidth.W)))
       val mem_write = Flipped(Valid(new LTCUnit_MemWrite(w, ramBlockArrdWidth))) // should be an input 😕
+      val sparcity_write = Flipped(Valid(new LTCUnit_SparcityMatWrite(synapseCounterWidth)))
   })
 
   // component instantiation
@@ -178,28 +187,72 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   val N_out_neurons = RegEnable(io.N_out_neurons_write.bits, 0.U, io.N_out_neurons_write.valid)
 
   // memory definition
-  // var weight_memories : Map[UInt, SyncReadMem[FixedPoint] ] = Map()
-  var weight_memories : Map[LTCUnit_WriteSel.Type, SyncReadMem[FixedPoint] ] = Map()
-  LTCUnit_WriteSel.all.foreach{
-    m => weight_memories += (m -> SyncReadMem(pow(2, ramBlockArrdWidth).toInt, FixedPoint(w.W, f.BP)))
+  var weight_mems : Map[LTCUnit_MemSel.Type, SyncReadMem[FixedPoint] ] = Map()
+  LTCUnit_MemSel.all.foreach{
+    m => weight_mems += (m -> SyncReadMem(pow(2, ramBlockArrdWidth).toInt, FixedPoint(w.W, f.BP)))
   }
+  var sparcity_mem = SyncReadMem(maxSynapses, Bool())
 
   // memory write 
   when(io.mem_write.fire) {
-    // weight_memories(io.mem_write.bits.writeSelect)(io.mem_write.bits.writeAddr) := io.mem_write.bits.writeData
-    LTCUnit_WriteSel.all.foreach{
+    LTCUnit_MemSel.all.foreach{
     m => {
       when(io.mem_write.bits.writeSelect === m) {
-        weight_memories(m)(io.mem_write.bits.writeAddr) := io.mem_write.bits.writeData.asFixedPoint(f.BP)
+        weight_mems(m)(io.mem_write.bits.writeAddr) := io.mem_write.bits.writeData.asFixedPoint(f.BP)
         }
       }
     }
+  }
+  when(io.sparcity_write.fire) {
+    sparcity_mem(io.sparcity_write.bits.writeAddr) := io.sparcity_write.bits.writeData
   }
 
   // event signals
   val last_neuron = Wire(Bool())
   last_neuron := (io.j >= N_out_neurons)
   val done_shrg = ShiftRegister(last_neuron, 9+sigmoid.LATENCY, io.en)
+
+  val accu_rst_shrg = ShiftRegister(io.neuron_done, 8+sigmoid.LATENCY, io.en)
+
+  val active_synaps_cnt_rst = RegEnable(io.fire, io.en)
+
+  // control
+  val current_synapse_active = Wire(Bool())
+  current_synapse_active := sparcity_mem(io.k)
+  val current_synapse_active_shrg = ShiftRegister(current_synapse_active, 5+sigmoid.LATENCY, io.en)
+
+  val active_synaps_counter = RegInit(0.U(synapseCounterWidth.W))
+  when (active_synaps_cnt_rst) {
+    active_synaps_counter := 0.U
+  }.elsewhen (current_synapse_active && io.en) {
+    // inc counter, assuming overflow is impossible
+    active_synaps_counter := active_synaps_counter + 1.U
+  }
+
+  // weigth address propagaion
+  val μ_addr    = RegNext(active_synaps_counter) // the day may come when I regred these variable names...  But it is not this day! 👊
+  val γ_addr    = RegNext(μ_addr)
+  val w_addr    = ShiftRegister(γ_addr, 1+sigmoid.LATENCY)
+  val Erev_addr = RegNext(w_addr)
+
+  // datapath
+  val x_in_shrg = ShiftRegister(io.x_z1, 2)
+  val μ = weight_mems(LTCUnit_MemSel.mu)(μ_addr)
+  val x_minus_μ = RegNext(x_in_shrg - μ)
+  val γ = weight_mems(LTCUnit_MemSel.gamma)(γ_addr)
+  val sigmoid_in = RegNext(γ * x_minus_μ)
+  sigmoid.io.x := sigmoid_in
+  val sigmoid_out = RegNext(sigmoid.io.y)
+  val w_weight = weight_mems(LTCUnit_MemSel.w)(w_addr)
+  val s_times_w = RegNext(Mux(
+      current_synapse_active_shrg, 
+        sigmoid_out * w_weight, 
+        0.U.asFixedPoint(f.BP)
+    ))
+
+  // activation accumulators
+  val act_accu = Reg(chiselTypeOf(io.act))
+  val rev_act_accu = Reg(chiselTypeOf(io.rev_act))
 
   // output
   io.done := done_shrg
