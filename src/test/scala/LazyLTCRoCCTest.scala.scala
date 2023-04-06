@@ -143,12 +143,16 @@ class BasicTest extends AnyFlatSpec with ChiselScalatestTester {
     val N_out_neurons_test = 14
     test(new LTCUnit).withAnnotations(Seq(WriteVcdAnnotation)) { c =>
       c.clock.step() // step reset
+      c.io.en.poke(false.B) // disable LTC Unit
       c.io.j.poke(0.U)
       
       // write some value to N_out_neurons_write
       c.io.N_out_neurons_write.bits.poke(N_out_neurons_test.U)
       c.io.N_out_neurons_write.valid.poke(true.B)
+      
       c.clock.step()
+      c.io.en.poke(true.B)
+
       c.io.N_out_neurons_write.bits.poke(42.U)
       c.io.N_out_neurons_write.valid.poke(false.B)
       // check done is low
@@ -161,17 +165,18 @@ class BasicTest extends AnyFlatSpec with ChiselScalatestTester {
         c.clock.step()
         c.io.done.expect(false.B, s"done is set before j reaches max $N_out_neurons_test - j is only at $j")
       }
-      c.io.j.poke(N_out_neurons_test.U) // now done should be set internally - wait latency now
+      c.io.j.poke(N_out_neurons_test.U) // now last_neuron should be set internally - wait latency now
       // check done is low until 9+2 steps later
       for (i <- 0 until 9+2)
-      {
-        c.clock.step()
+      { // TODO: to be checked again after datapath is implemented 🤨
         c.io.done.expect(false.B, s"done is set before latency is over - only waited $i cc")
+        c.clock.step()
       }
 
       // check done is high
-      c.clock.step()
       c.io.done.expect(true.B, s"done is not set when expected at the end")
+      c.clock.step()
+      // TODO: maybe check if it goes back to low... or stays hight.. What does it need to be? 😵
 
     }
   }

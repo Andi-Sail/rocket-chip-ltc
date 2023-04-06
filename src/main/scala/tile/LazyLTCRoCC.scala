@@ -149,6 +149,7 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   val neuronCounterWidth = log2Ceil(maxNeurons)
   val io = IO(new Bundle {
 
+      val en          = Input(Bool())
       val j           = Input(UInt(neuronCounterWidth.W)) 
       val neuron_done = Input(Bool())
       val x_z1        = Input(FixedPoint(w.W, f.BP))
@@ -168,7 +169,7 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   // component instantiation
   val sigmoid = Module(new HardSigmoid(w, f)) // TODO add sigmoid lut_addr_w --> maybe define LTC Proc config in general somewhere, like rocket config
 
-  // TODO: shoudl be removed in the end!
+  // TODO: should be removed in the end!
   // default assigment to remove errors during development 
   io <> DontCare
   sigmoid.io <> DontCare
@@ -176,21 +177,20 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
 
   val N_out_neurons = RegEnable(io.N_out_neurons_write.bits, 0.U, io.N_out_neurons_write.valid)
 
-  var weight_memories : Map[LTCUnit_WriteSel.Type, SyncReadMem[FixedPoint] ] = Map()
   // memory definition
+  var weight_memories : Map[LTCUnit_WriteSel.Type, SyncReadMem[FixedPoint] ] = Map()
   LTCUnit_WriteSel.all.foreach{
     m => weight_memories += (m -> SyncReadMem(pow(2, ramBlockArrdWidth).toInt, FixedPoint(w.W, f.BP)))
   }
 
   // memory write 
   when(io.mem_write.fire) {
-    switch (io.mem_write.bits.writeSelect) {
-      // is()
-    }
   }
 
   // event signals
-  val done_shrg = ShiftRegister((io.j >= N_out_neurons), 9+sigmoid.LATENCY)
+  val last_neuron = Wire(Bool())
+  last_neuron := (io.j >= N_out_neurons)
+  val done_shrg = ShiftRegister(last_neuron, 9+sigmoid.LATENCY, io.en)
 
   // output
   io.done := done_shrg
