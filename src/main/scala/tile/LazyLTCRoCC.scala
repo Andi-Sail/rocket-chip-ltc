@@ -178,6 +178,7 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   val N_out_neurons = RegEnable(io.N_out_neurons_write.bits, 0.U, io.N_out_neurons_write.valid)
 
   // memory definition
+  // var weight_memories : Map[UInt, SyncReadMem[FixedPoint] ] = Map()
   var weight_memories : Map[LTCUnit_WriteSel.Type, SyncReadMem[FixedPoint] ] = Map()
   LTCUnit_WriteSel.all.foreach{
     m => weight_memories += (m -> SyncReadMem(pow(2, ramBlockArrdWidth).toInt, FixedPoint(w.W, f.BP)))
@@ -185,6 +186,14 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
 
   // memory write 
   when(io.mem_write.fire) {
+    // weight_memories(io.mem_write.bits.writeSelect)(io.mem_write.bits.writeAddr) := io.mem_write.bits.writeData
+    LTCUnit_WriteSel.all.foreach{
+    m => {
+      when(io.mem_write.bits.writeSelect === m) {
+        weight_memories(m)(io.mem_write.bits.writeAddr) := io.mem_write.bits.writeData.asFixedPoint(f.BP)
+        }
+      }
+    }
   }
 
   // event signals

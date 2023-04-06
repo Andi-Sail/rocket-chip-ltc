@@ -3,9 +3,10 @@ import chisel3._
 import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.stage.PrintFullStackTraceAnnotation
-import freechips.rocketchip.tile.{LTCUnit, HardSigmoid}
 import org.scalatest.funsuite.AnyFunSuite
+import chisel3.stage.PrintFullStackTraceAnnotation
 
+import freechips.rocketchip.tile.{LTCUnit, HardSigmoid}
 import chisel3.experimental.FixedPoint
 
 import  Array._
@@ -136,7 +137,7 @@ class SigmoidImplTest extends AnyFlatSpec with ChiselScalatestTester {
   }
 }
 
-class BasicTest extends AnyFlatSpec with ChiselScalatestTester {
+class LTCUnit_Datapath_test extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "LTCUnit"
   // test class body here
   it should "activate done according N_out_neurons " in {
@@ -177,6 +178,22 @@ class BasicTest extends AnyFlatSpec with ChiselScalatestTester {
       c.io.done.expect(true.B, s"done is not set when expected at the end")
       c.clock.step()
       // TODO: maybe check if it goes back to low... or stays hight.. What does it need to be? 😵
+
+    }
+  }
+}
+
+class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
+  behavior of "LTCUnit"
+  // test class body here
+  it should "write some weights to memory " in {
+    test(new LTCUnit).withAnnotations(Seq(
+      WriteVcdAnnotation,
+      PrintFullStackTraceAnnotation)) { c =>
+      c.clock.step() // step reset
+      c.io.en.poke(false.B) // disable LTC Unit
+      c.io.j.poke(0.U)
+      
 
     }
   }
