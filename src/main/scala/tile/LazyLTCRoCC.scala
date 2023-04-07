@@ -158,7 +158,7 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
 
       val en          = Input(Bool())
       val j           = Input(UInt(neuronCounterWidth.W)) 
-      val neuron_done = Input(Bool())
+      val last_state = Input(Bool())
       val x_z1        = Input(FixedPoint(w.W, f.BP))
       val k           = Input(UInt(synapseCounterWidth.W))
       val fire        = Input(Bool())
@@ -171,8 +171,8 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
       val valid   = Output(Bool())
 
       val N_out_neurons_write = Flipped(Valid(UInt(neuronCounterWidth.W)))
-      val mem_write = Flipped(Valid(new LTCUnit_MemWrite(w, ramBlockArrdWidth))) // should be an input 😕
       val sparcity_write = Flipped(Valid(new LTCUnit_SparcityMatWrite(synapseCounterWidth)))
+      val mem_write = Flipped(Valid(new LTCUnit_MemWrite(w, ramBlockArrdWidth))) // should be an input 😕
   })
 
   // component instantiation
@@ -209,12 +209,16 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
 
   // event signals
   val last_neuron = Wire(Bool())
-  last_neuron := (io.j >= N_out_neurons)
+  last_neuron := (io.j >= (N_out_neurons-1.U))
   val done_shrg = ShiftRegister(last_neuron, 9+sigmoid.LATENCY, io.en)
-
-  val accu_rst_shrg = ShiftRegister(io.neuron_done, 8+sigmoid.LATENCY, io.en)
-
+  
+  val accu_rst_shrg = ShiftRegister(io.last_state, 8+sigmoid.LATENCY, io.en)
+  val accu_done = RegNext(accu_rst_shrg)
+  
   val active_synaps_cnt_rst = RegEnable(io.fire, io.en)
+  
+  val busy = RegInit(false.B)
+  when(io.fire) { busy := true.B }.elsewhen(done_shrg && accu_done) { busy := false.B }
 
   // control
   val current_synapse_active = Wire(Bool())
@@ -240,22 +244,45 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   val μ = weight_mems(LTCUnit_MemSel.mu)(μ_addr)
   val x_minus_μ = RegNext(x_in_shrg - μ)
   val γ = weight_mems(LTCUnit_MemSel.gamma)(γ_addr)
-  val sigmoid_in = RegNext(γ * x_minus_μ)
+  val sigmoid_in = Reg(FixedPoint(w.W, f.BP))
+  sigmoid_in := γ * x_minus_μ
   sigmoid.io.x := sigmoid_in
   val sigmoid_out = RegNext(sigmoid.io.y)
   val w_weight = weight_mems(LTCUnit_MemSel.w)(w_addr)
+  val s_times_w_1 = Wire(FixedPoint(w.W, f.BP))
+  s_times_w_1 := sigmoid_out * w_weight
   val s_times_w = RegNext(Mux(
       current_synapse_active_shrg, 
-        sigmoid_out * w_weight, 
+        s_times_w_1, 
         0.U.asFixedPoint(f.BP)
     ))
+  val E_rev = weight_mems(LTCUnit_MemSel.erev)(Erev_addr)
 
   // activation accumulators
   val act_accu = Reg(chiselTypeOf(io.act))
   val rev_act_accu = Reg(chiselTypeOf(io.rev_act))
 
+  val s_times_w_times_E_rev = Wire(FixedPoint(w.W, f.BP))
+  s_times_w_times_E_rev := (s_times_w * E_rev)
+
+  when(accu_rst_shrg) {
+    act_accu     := s_times_w
+    rev_act_accu := s_times_w_times_E_rev
+  }.otherwise {
+    act_accu     := act_accu     + s_times_w
+    rev_act_accu := rev_act_accu + s_times_w_times_E_rev
+  }
+
   // output
-  io.done := done_shrg
+  io.valid := accu_rst_shrg
+  when(accu_rst_shrg) {
+    io.act     := act_accu
+    io.rev_act := rev_act_accu
+  }
+
+  io.done := done_shrg && accu_done
+  io.busy := busy
+
 }
 
 class HardSigmoid(val w: Int = 32, val f: Int = 16, lut_addr_w: Int = 6) extends Module {

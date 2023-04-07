@@ -4,9 +4,8 @@ import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.stage.PrintFullStackTraceAnnotation
 import org.scalatest.funsuite.AnyFunSuite
-import chisel3.stage.PrintFullStackTraceAnnotation
 
-import freechips.rocketchip.tile.{LTCUnit, HardSigmoid}
+import freechips.rocketchip.tile.{LTCUnit, HardSigmoid, LTCUnit_MemSel}
 import chisel3.experimental.FixedPoint
 
 import  Array._
@@ -162,44 +161,232 @@ class LTCUnit_Datapath_test extends AnyFlatSpec with ChiselScalatestTester {
       // step and increment j until j > N_out_neurons
       for (j <- 0 until N_out_neurons_test)
       {
-        c.io.j.poke(j.U)
-        c.clock.step()
         c.io.done.expect(false.B, s"done is set before j reaches max $N_out_neurons_test - j is only at $j")
+        c.clock.step()
+        c.io.j.poke(j.U)
       }
-      c.io.j.poke(N_out_neurons_test.U) // now last_neuron should be set internally - wait latency now
+      c.io.last_state.poke(true)
       // check done is low until 9+2 steps later
       for (i <- 0 until 9+c.sigmoid.LATENCY)
       { // TODO: to be checked again after datapath is implemented 🤨
         c.io.done.expect(false.B, s"done is set before latency is over - only waited $i cc")
         c.clock.step()
+        c.io.last_state.poke(false)
       }
 
       // check done is high
       c.io.done.expect(true.B, s"done is not set when expected at the end")
       c.clock.step()
       // TODO: maybe check if it goes back to low... or stays hight.. What does it need to be? 😵
-
+      c.clock.step(10)
     }
   }
 }
 
 class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "LTCUnit"
-  // test class body here
-  it should "write some weights to memory " in {
+  it should "write some weights to memory and run inference" in {
+    val N_neurons = 12
     test(new LTCUnit).withAnnotations(Seq(
       WriteVcdAnnotation,
       PrintFullStackTraceAnnotation)) { c =>
       c.clock.step() // step reset
       c.io.en.poke(false.B) // disable LTC Unit
       c.io.j.poke(0.U)
-      
       c.io.k.poke(0.U)
-      for ( i <- 0 until 10)
+      c.clock.step()
+
+      // write N out neurons
+      c.io.N_out_neurons_write.bits.poke(N_neurons)
+      c.io.N_out_neurons_write.valid.poke(true)
+      c.clock.step()
+      c.io.N_out_neurons_write.valid.poke(false)
+      c.clock.step()
+
+      // write sparcity
+      println("writing someting to sparcity")
+      var current_synapse_active = true
+      c.io.sparcity_write.valid.poke(true.B)
+      for (i <- 0 until N_neurons)
       {
-        c.io.k.poke(i.U)
-        c.clock.step()
+        for (j <- 0 until N_neurons)
+        {
+          val addr = i*N_neurons + j
+          // println(s"writing $current_synapse_active to $addr")
+          c.io.sparcity_write.bits.writeAddr.poke(addr)
+          c.io.sparcity_write.bits.writeData.poke(current_synapse_active)
+          c.clock.step()
+          current_synapse_active = !current_synapse_active // just use every 2nd active to test writing
+        }
       }
+      c.io.sparcity_write.valid.poke(false)
+
+      c.clock.step()
+
+      c.io.mem_write.valid.poke(true)
+      LTCUnit_MemSel.all.foreach{ m =>
+        println(s"writing something to $m")
+        c.io.mem_write.bits.writeSelect.poke(m)
+        for (i <- 0 until (N_neurons*N_neurons / 2)) // only half of the weights since half of the synapses are inactive
+        {
+          c.io.mem_write.bits.writeAddr.poke(i)
+          c.io.mem_write.bits.writeData.poke(i*2)
+          c.clock.step()
+        }
+      }
+      c.io.mem_write.valid.poke(false)
+
+      // activate unit and feed some states
+      c.io.en.poke(true)
+      c.io.fire.poke(true)
+      var k = 0
+      for (j <- 0 until N_neurons)
+      {
+        c.io.j.poke(j)
+        for (i <- 0 until N_neurons)
+        {
+          c.io.k.poke(k)
+          c.io.x_z1.poke(k)
+          c.io.last_state.poke(i === (N_neurons-1))
+
+          c.clock.step()
+
+          c.io.fire.poke(false)
+          c.io.last_state.poke(false)
+          c.io.busy.expect(true)
+          k += 1
+        }
+      }
+      
+      for (_ <- 0 until (9+c.sigmoid.LATENCY -1 ))
+      {
+        c.io.done.expect(false)
+        c.clock.step()
+        c.io.busy.expect(true)
+      }
+      
+      c.io.done.expect(true)
+      c.clock.step()
+      c.io.busy.expect(false)
+      c.clock.step(200)
+      c.io.busy.expect(false)
+    }
+  }
+}
+
+
+class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
+  behavior of "LTCUnit"
+
+  val W = 32
+  val F = 16
+  it should "run sandbox model" in {
+    val units = 12
+    val ode_synapses = 40 
+    val rnn_ltc_cell_sigma_0_sparse = Array(367613,255819,338817,229012,459762,222331,223539,484417,241515,242545,453483,301777,421650,206624,310783,245134,361151,369960,395552,260044,512156,320299,463401,342041,344477,337268,437710,311044,222575,323588,475809,463067,390843,478371,348468,510568,217154,403005,384321,327194)
+    val rnn_ltc_cell_mu_0_sparse    = Array(49441,40634,41717,31924,41710,21278,43594,39012,23347,47881,40233,28271,40225,46320,24970,49039,23197,23625,24707,31425,41313,27711,30383,36998,28348,41328,36814,47927,48423,25881,40413,34082,21574,33754,22025,35257,50172,23325,30692,27171)
+    val rnn_ltc_cell_w_0_sparse     = Array(9293,62978,25670,34177,24137,25361,2778,27216,12473,32812,51483,29373,48858,5795,180,53725,23950,10882,1558,27727,23090,53398,60116,34631,29276,41646,19252,42895,19090,49614,2803,39301,45945,52478,64255,14678,60613,26829,32834,58293)
+    val rnn_ltc_cell_erev_0_sparse  = Array(-65536,-65536,65536,-65536,65536,65536,-65536,65536,65536,65536,-65536,-65536,65536,65536,65536,65536,65536,-65536,-65536,65536,65536,-65536,-65536,-65536,65536,-65536,-65536,65536,65536,65536,65536,65536,65536,65536,-65536,-65536,-65536,65536,65536,65536)
+    val weigth_map = Map(
+       LTCUnit_MemSel.gamma -> rnn_ltc_cell_sigma_0_sparse,
+       LTCUnit_MemSel.mu    -> rnn_ltc_cell_mu_0_sparse,
+       LTCUnit_MemSel.w     -> rnn_ltc_cell_w_0_sparse,
+       LTCUnit_MemSel.erev  -> rnn_ltc_cell_erev_0_sparse,
+    )
+    
+    val sparcity_matrix             = Array(Array(0,0,0,0,0,0,0,0,0,0,0,0),Array(0,0,0,0,0,0,0,0,0,0,0,0),Array(1,1,0,0,0,0,1,0,0,0,0,0),Array(1,1,0,0,0,1,0,0,0,0,0,0),Array(1,1,0,1,1,0,1,0,0,0,0,0),Array(1,1,1,0,0,0,0,0,0,0,0,0),Array(1,0,0,0,0,0,0,0,0,0,0,0),Array(0,0,1,1,1,1,1,0,0,0,0,0),Array(0,0,1,1,1,1,1,0,0,0,0,0),Array(0,0,1,1,1,1,1,0,0,0,0,0),Array(0,0,1,1,1,1,1,0,0,0,0,0),Array(0,0,1,1,1,1,1,0,0,0,0,0))
+    // NOTE: sparcity_matrix is not transposed!!!!
+
+    val states_1 = Array(0,0,0,0,0,0,0,0,0,0,0,0) 
+    val rev_activation_1 = Array(-5081,1708,18655,9637,-11677,10293,9145,0,0,0,0,0) 
+    val activation1 = Array(8165,4650,27433,13475,12547,10293,22435,0,0,0,0,0) 
+    val states_2 = Array(-2347,412,5155,2492,-3516,2521,844,-7718,8680,-3362,4720,4225) 
+    val rev_activation_2 = Array(-8476,2097,24191,12722,-13407,14519,10918,0,0,0,0,0) 
+    val activation2 = Array(11110,6031,30799,16136,14007,14519,27390,0,0,0,0,0) 
+    test(new LTCUnit).withAnnotations(Seq(
+      WriteVcdAnnotation,
+      PrintFullStackTraceAnnotation)) { c =>
+      c.clock.step() // step reset
+      c.io.en.poke(false.B) // disable LTC Unit
+      c.io.j.poke(0.U)
+      c.io.k.poke(0.U)
+      c.clock.step()
+
+      // write N out neurons
+      c.io.N_out_neurons_write.bits.poke(units)
+      c.io.N_out_neurons_write.valid.poke(true)
+      c.clock.step()
+      c.io.N_out_neurons_write.valid.poke(false)
+      c.clock.step()
+
+      // write sparcity
+      println("writing someting to sparcity")
+      c.io.sparcity_write.valid.poke(true.B)
+      for (i <- 0 until units)
+      {
+        for (j <- 0 until units)
+        {
+          val addr = i*units + j
+          c.io.sparcity_write.bits.writeAddr.poke(addr)
+          c.io.sparcity_write.bits.writeData.poke(sparcity_matrix(j)(i)) // NOTE: mat is transposed here!!!!!!!!!
+          c.clock.step()
+        }
+      }
+      c.io.sparcity_write.valid.poke(false)
+
+      c.clock.step()
+
+      c.io.mem_write.valid.poke(true)
+      LTCUnit_MemSel.all.foreach{ m =>
+        println(s"writing something to $m")
+        c.io.mem_write.bits.writeSelect.poke(m)
+        for (i <- 0 until ode_synapses) // only half of the weights since half of the synapses are inactive
+        {
+          c.io.mem_write.bits.writeAddr.poke(i)
+          c.io.mem_write.bits.writeData.poke(("b" + weigth_map(m)(i).toBinaryString ).U(W.W))
+          c.clock.step()
+        }
+      }
+      c.io.mem_write.valid.poke(false)
+
+      // activate unit and feed some states
+      c.io.en.poke(true)
+      c.io.fire.poke(true)
+
+      
+      var k = 0
+      for (j <- 0 until units)
+      {
+        c.io.j.poke(j)
+        for (i <- 0 until units)
+        {
+          c.io.k.poke(k)
+          c.io.x_z1.poke(FixedPoint(states_1(i), W.W, F.BP))
+          c.io.last_state.poke(i === (units-1))
+
+          c.clock.step()
+
+          c.io.fire.poke(false)
+          c.io.last_state.poke(false)
+          c.io.busy.expect(true)
+          k += 1
+        }
+      }
+      
+      
+
+      for (_ <- 0 until (9+c.sigmoid.LATENCY -1 ))
+      {
+        c.io.done.expect(false)
+        c.clock.step()
+        c.io.busy.expect(true)
+      }
+      
+      c.io.done.expect(true)
+      c.clock.step()
+      c.io.busy.expect(false)
+      c.clock.step(200)
+      c.io.busy.expect(false)
     }
   }
 }
