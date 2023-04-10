@@ -20,6 +20,7 @@ import breeze.{linalg => blinag}
 import breeze.{numerics => bnumerics}
 
 import scala.math._
+import chisel3.experimental.ChiselAnnotation
 
 
 /**
@@ -173,6 +174,9 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
       val N_out_neurons_write = Flipped(Valid(UInt(neuronCounterWidth.W)))
       val sparcity_write = Flipped(Valid(new LTCUnit_SparcityMatWrite(synapseCounterWidth)))
       val mem_write = Flipped(Valid(new LTCUnit_MemWrite(w, ramBlockArrdWidth))) // should be an input 😕
+
+      val dummy_toggler_out = Output(Bool())
+      val dummy_x_out = Output(FixedPoint(w.W, f.BP))
   })
 
   // component instantiation
@@ -182,6 +186,9 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   // default assigment to remove errors during development 
   io <> DontCare
   sigmoid.io <> DontCare
+  val dummy_toggler = RegInit(false.B)
+  dummy_toggler := !dummy_toggler
+  io.dummy_toggler_out := dummy_toggler
 
 
   val N_out_neurons = RegEnable(io.N_out_neurons_write.bits, 0.U, io.N_out_neurons_write.valid)
@@ -210,9 +217,9 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   // event signals
   val last_neuron = Wire(Bool())
   last_neuron := (io.j >= (N_out_neurons-1.U))
-  val done_shrg = ShiftRegister(last_neuron, 9+sigmoid.LATENCY, io.en)
+  val done_shrg = ShiftRegister(last_neuron, 9+sigmoid.LATENCY +1, io.en) // TODO: check consequences of adding one more cc latency here
   
-  val accu_rst_shrg = ShiftRegister(io.last_state, 8+sigmoid.LATENCY, io.en)
+  val accu_rst_shrg = ShiftRegister(io.last_state, 8+sigmoid.LATENCY +1, io.en) // TODO: check consequences of adding one more cc latency here
   val accu_done = RegNext(accu_rst_shrg)
   
   val active_synaps_cnt_rst = RegEnable(io.fire, io.en)
@@ -225,34 +232,37 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   current_synapse_active := sparcity_mem(io.k)
   val current_synapse_active_shrg = ShiftRegister(current_synapse_active, 5+sigmoid.LATENCY, io.en)
 
-  val active_synaps_counter = RegInit(0.U(synapseCounterWidth.W))
+  val active_synaps_counter_next = RegInit(0.U(synapseCounterWidth.W))
   when (active_synaps_cnt_rst) {
-    active_synaps_counter := 0.U
+    active_synaps_counter_next := 0.U
   }.elsewhen (current_synapse_active && io.en) {
     // inc counter, assuming overflow is impossible
-    active_synaps_counter := active_synaps_counter + 1.U
+    active_synaps_counter_next := active_synaps_counter_next + 1.U
   }
+  val active_synaps_counter = RegEnable(active_synaps_counter_next, 0.U, current_synapse_active && io.en)
 
   // weigth address propagaion
-  val μ_addr    = RegNext(active_synaps_counter) // the day may come when I regred these variable names...  But it is not this day! 👊
-  val γ_addr    = RegNext(μ_addr)
-  val w_addr    = ShiftRegister(γ_addr, 1+sigmoid.LATENCY)
-  val Erev_addr = RegNext(w_addr)
+  val mu_addr    = RegNext(active_synaps_counter)
+  val gamma_addr = RegNext(mu_addr)
+  val w_addr     = ShiftRegister(gamma_addr, 2+sigmoid.LATENCY)
+  val Erev_addr  = RegNext(w_addr)
 
   // datapath
   val x_in_shrg = ShiftRegister(io.x_z1, 2)
-  val μ = weight_mems(LTCUnit_MemSel.mu)(μ_addr)
-  val x_minus_μ = RegNext(x_in_shrg - μ)
-  val γ = weight_mems(LTCUnit_MemSel.gamma)(γ_addr)
+  io.dummy_x_out := x_in_shrg // TODO: onyl for testing
+  val mu = weight_mems(LTCUnit_MemSel.mu)(mu_addr)
+  val x_minus_mu = RegNext(x_in_shrg - mu)
+  // val x_minus_mu = RegNext( - mu) // TODO: only to test with initial zero state
+  val gamma = weight_mems(LTCUnit_MemSel.gamma)(gamma_addr)
   val sigmoid_in = Reg(FixedPoint(w.W, f.BP))
-  sigmoid_in := γ * x_minus_μ
+  sigmoid_in := gamma * x_minus_mu
   sigmoid.io.x := sigmoid_in
   val sigmoid_out = RegNext(sigmoid.io.y)
   val w_weight = weight_mems(LTCUnit_MemSel.w)(w_addr)
   val s_times_w_1 = Wire(FixedPoint(w.W, f.BP))
   s_times_w_1 := sigmoid_out * w_weight
   val s_times_w = RegNext(Mux(
-      current_synapse_active_shrg, 
+      RegNext(current_synapse_active_shrg), 
         s_times_w_1, 
         0.U.asFixedPoint(f.BP)
     ))
