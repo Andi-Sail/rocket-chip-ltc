@@ -379,7 +379,9 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
             {
               c.io.k.poke(k)
               // c.io.x_z1.poke(FixedPoint(i+1, W.W, F.BP))
-              c.io.x_z1.poke(FixedPoint(states(i), W.W, F.BP))
+              if (i > 0) {
+                c.io.x_z1.poke(FixedPoint(states(i-1), W.W, F.BP))
+              }
 
               fork {timescope{
                 c.io.last_state.poke(i === (units-1))
@@ -391,7 +393,9 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
               c.io.busy.expect(true)
               k += 1
             }
+            c.io.x_z1.poke(FixedPoint(states(units-1), W.W, F.BP))
           }
+          c.clock.step()
         } 
 
         for (out_cnt <- 0 until units)

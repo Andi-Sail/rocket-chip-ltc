@@ -248,7 +248,7 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   val Erev_addr  = RegNext(w_addr)
 
   // datapath
-  val x_in_shrg = ShiftRegister(io.x_z1, 2)
+  val x_in_shrg = ShiftRegister(io.x_z1, 2 +1) // TODO: Why is there one more cc latency required???
   io.dummy_x_out := x_in_shrg // TODO: onyl for testing
   val mu = weight_mems(LTCUnit_MemSel.mu)(mu_addr)
   val x_minus_mu = RegNext(x_in_shrg - mu)
