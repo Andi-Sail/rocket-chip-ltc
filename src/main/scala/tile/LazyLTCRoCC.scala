@@ -176,11 +176,15 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
       val mem_write = Flipped(Valid(new LTCUnit_MemWrite(w, ramBlockArrdWidth))) // should be an input 😕
 
       val dummy_toggler_out = Output(Bool())
-      val dummy_x_out = Output(FixedPoint(w.W, f.BP))
+      val time_out = Output(UInt(32.W))
   })
 
   // component instantiation
   val sigmoid = Module(new HardSigmoid(w, f)) // TODO add sigmoid lut_addr_w --> maybe define LTC Proc config in general somewhere, like rocket config
+
+  // constants
+  val LATENCY = sigmoid.LATENCY + 10 // Latency per neuron
+  val THROUGHPUT = 1 // 1 synapse per cc
 
   // TODO: should be removed in the end!
   // default assigment to remove errors during development 
@@ -189,6 +193,12 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   val dummy_toggler = RegInit(false.B)
   dummy_toggler := !dummy_toggler
   io.dummy_toggler_out := dummy_toggler
+
+  val time_reg = RegInit(0.U(32.W))
+  when (io.en) {
+    time_reg := time_reg + 1.U
+  }
+  io.time_out := time_reg
 
 
   val N_out_neurons = RegEnable(io.N_out_neurons_write.bits, 0.U, io.N_out_neurons_write.valid)
@@ -230,7 +240,7 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   // control
   val current_synapse_active = Wire(Bool())
   current_synapse_active := sparcity_mem(io.k)
-  val current_synapse_active_shrg = ShiftRegister(current_synapse_active, 5+sigmoid.LATENCY, io.en)
+  val current_synapse_active_shrg = ShiftRegister(current_synapse_active, 5+sigmoid.LATENCY +1, io.en)
 
   val active_synaps_counter_next = RegInit(0.U(synapseCounterWidth.W))
   when (active_synaps_cnt_rst) {
@@ -249,10 +259,8 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
 
   // datapath
   val x_in_shrg = ShiftRegister(io.x_z1, 2 +1) // TODO: Why is there one more cc latency required???
-  io.dummy_x_out := x_in_shrg // TODO: onyl for testing
   val mu = weight_mems(LTCUnit_MemSel.mu)(mu_addr)
   val x_minus_mu = RegNext(x_in_shrg - mu)
-  // val x_minus_mu = RegNext( - mu) // TODO: only to test with initial zero state
   val gamma = weight_mems(LTCUnit_MemSel.gamma)(gamma_addr)
   val sigmoid_in = Reg(FixedPoint(w.W, f.BP))
   sigmoid_in := gamma * x_minus_mu
@@ -262,7 +270,7 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   val s_times_w_1 = Wire(FixedPoint(w.W, f.BP))
   s_times_w_1 := sigmoid_out * w_weight
   val s_times_w = RegNext(Mux(
-      RegNext(current_synapse_active_shrg), 
+      current_synapse_active_shrg,
         s_times_w_1, 
         0.U.asFixedPoint(f.BP)
     ))
