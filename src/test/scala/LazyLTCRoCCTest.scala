@@ -137,6 +137,7 @@ class SigmoidImplTest extends AnyFlatSpec with ChiselScalatestTester {
 }
 
 class LTCUnit_Datapath_test extends AnyFlatSpec with ChiselScalatestTester {
+  
   behavior of "LTCUnit"
   // test class body here
   it should "activate done according N_out_neurons " in {
@@ -184,6 +185,7 @@ class LTCUnit_Datapath_test extends AnyFlatSpec with ChiselScalatestTester {
 }
 
 class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
+  
   behavior of "LTCUnit"
   it should "write some weights to memory and run inference" in {
     val N_neurons = 12
@@ -277,6 +279,7 @@ class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
 
 class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "LTCUnit"
+  (new chisel3.stage.ChiselStage).emitVerilog(new LTCUnit(w=32, f=16))
 
   val W = 32
   val F = 16
