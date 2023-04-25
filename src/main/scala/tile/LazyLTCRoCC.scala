@@ -150,7 +150,8 @@ class LTCUnit_SparcityMatWrite(val addrWidth : Int) extends Bundle {
 
 class LTCUnit(  val w: Int = 32, val f: Int = 16, 
                 val maxNeurons: Int = 256, 
-                val ramBlockArrdWidth : Int = 9
+                val ramBlockArrdWidth : Int = 9,
+                val hwMultWidth : Int = 17
               ) extends Module {
 
   val neuronCounterWidth = log2Ceil(maxNeurons)
@@ -186,7 +187,10 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
 
   // TODO: add multiplier latency based on W. --> It needs more if W == 32
   // constants
-  val LATENCY = sigmoid.LATENCY + 10 // Latency input to output
+  // val MULT_LATENCY = if (w > 17) {4} else {1}
+  val MULT_LATENCY = 1
+  println(s"Mult lantency is: $MULT_LATENCY")
+  val LATENCY = sigmoid.LATENCY + 8 + 2*MULT_LATENCY + (MULT_LATENCY-1) // Latency input to output
   val THROUGHPUT = 1 // 1 synapse per cc
 
   // TODO: should be removed in the end! Why is this still necessarry?
@@ -230,9 +234,9 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   // event signals
   val last_neuron = Wire(Bool())
   last_neuron := (io.j >= (N_out_neurons-1.U))
-  val done_shrg = ShiftRegister(last_neuron, 10+sigmoid.LATENCY, io.en) 
+  val done_shrg = ShiftRegister(last_neuron, LATENCY, io.en) 
   
-  val accu_rst_shrg = ShiftRegister(io.last_state, 9+sigmoid.LATENCY, io.en)
+  val accu_rst_shrg = ShiftRegister(io.last_state, LATENCY-1, io.en)
   val accu_done = RegNext(accu_rst_shrg)
   
   val active_synaps_cnt_rst = RegEnable(io.fire, io.en)
@@ -243,7 +247,7 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   // control
   val current_synapse_active = Wire(Bool())
   current_synapse_active := sparcity_mem(io.k)
-  val current_synapse_active_shrg = ShiftRegister(current_synapse_active, 6+sigmoid.LATENCY, io.en)
+  val current_synapse_active_shrg = ShiftRegister(current_synapse_active, 5+MULT_LATENCY+sigmoid.LATENCY, io.en)
 
   val active_synaps_counter_next = RegInit(0.U(synapseCounterWidth.W))
   when (active_synaps_cnt_rst) {
@@ -258,26 +262,26 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   // weigth address propagaion
   val mu_addr    = RegNext(active_synaps_counter)
   val gamma_addr = RegNext(mu_addr)
-  val w_addr     = ShiftRegister(gamma_addr, 2+sigmoid.LATENCY)
-  val Erev_addr  = RegNext(w_addr)
+  val w_addr     = ShiftRegister(gamma_addr, 1+MULT_LATENCY+sigmoid.LATENCY)
+  val Erev_addr  = ShiftRegister(w_addr, 1+(MULT_LATENCY-1))
 
   // datapath
   val x_in_shrg = ShiftRegister(io.x_z1, 3)
   val mu = weight_mems(LTCUnit_MemSel.mu)(mu_addr)
   val x_minus_mu = RegNext(x_in_shrg - mu)
   val gamma = weight_mems(LTCUnit_MemSel.gamma)(gamma_addr)
-  val sigmoid_in = Reg(FixedPoint(w.W, f.BP))
+  val sigmoid_in = Wire(FixedPoint(w.W, f.BP))
   sigmoid_in := gamma * x_minus_mu
-  sigmoid.io.x := sigmoid_in
+  sigmoid.io.x := ShiftRegister(sigmoid_in, MULT_LATENCY)
   val sigmoid_out = RegNext(sigmoid.io.y)
   val w_weight = weight_mems(LTCUnit_MemSel.w)(w_addr)
   val s_times_w_1 = Wire(FixedPoint(w.W, f.BP))
   s_times_w_1 := sigmoid_out * w_weight
-  val s_times_w = RegNext(Mux(
+  val s_times_w = ShiftRegister(Mux(
       current_synapse_active_shrg,
         s_times_w_1, 
         0.U.asFixedPoint(f.BP)
-    ))
+    ), MULT_LATENCY)
   val E_rev = weight_mems(LTCUnit_MemSel.erev)(Erev_addr)
 
   // activation accumulators
@@ -287,12 +291,15 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   val s_times_w_times_E_rev = Wire(FixedPoint(w.W, f.BP))
   s_times_w_times_E_rev := (s_times_w * E_rev)
 
+  val s_times_w_reg = ShiftRegister(s_times_w, MULT_LATENCY-1)  
+  val s_times_w_times_E_rev_reg = ShiftRegister(s_times_w_times_E_rev, MULT_LATENCY-1)
+
   when(accu_rst_shrg) {
-    act_accu     := s_times_w
-    rev_act_accu := s_times_w_times_E_rev
+    act_accu     := s_times_w_reg
+    rev_act_accu := s_times_w_times_E_rev_reg
   }.otherwise {
-    act_accu     := act_accu     + s_times_w
-    rev_act_accu := rev_act_accu + s_times_w_times_E_rev
+    act_accu     := act_accu     + s_times_w_reg
+    rev_act_accu := rev_act_accu + s_times_w_times_E_rev_reg
   }
 
   // output
