@@ -136,6 +136,23 @@ class SigmoidImplTest extends AnyFlatSpec with ChiselScalatestTester {
   }
 }
 
+
+class LTCUnit_Latency_test extends AnyFlatSpec with ChiselScalatestTester {
+  
+  behavior of "LTCUnit"
+  // test class body here
+  for (w <- Seq(16,32))
+  {
+    it should s"check the latency of the LTC Unit with w=$w" in {
+      test(new LTCUnit(w=w, f=w/2)).withAnnotations(Seq(PrintFullStackTraceAnnotation)) { c =>
+        val exp_mult_latency = if (w > 17) {4} else {1}
+        val exp_latency = 2 + 8 + 2*exp_mult_latency + (exp_mult_latency-1)
+        assert(c.LATENCY == exp_latency)
+      }
+    }
+  }
+}
+
 class LTCUnit_Datapath_test extends AnyFlatSpec with ChiselScalatestTester {
   
   behavior of "LTCUnit"
@@ -168,7 +185,7 @@ class LTCUnit_Datapath_test extends AnyFlatSpec with ChiselScalatestTester {
       }
       c.io.last_state.poke(true)
       // check done is low until 9+2 steps later
-      for (i <- 0 until 9+c.sigmoid.LATENCY +1)
+      for (i <- 0 until c.LATENCY)
       { // TODO: to be checked again after datapath is implemented 🤨
         c.io.done.expect(false.B, s"done is set before latency is over - only waited $i cc")
         c.clock.step()
@@ -260,7 +277,7 @@ class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
         }
       }
       
-      for (_ <- 0 until (9+c.sigmoid.LATENCY  ))
+      for (_ <- 0 until (c.LATENCY - 1))
       {
         c.io.done.expect(false)
         c.clock.step()

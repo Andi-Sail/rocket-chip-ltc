@@ -151,7 +151,7 @@ class LTCUnit_SparcityMatWrite(val addrWidth : Int) extends Bundle {
 class LTCUnit(  val w: Int = 32, val f: Int = 16, 
                 val maxNeurons: Int = 256, 
                 val ramBlockArrdWidth : Int = 9,
-                val hwMultWidth : Int = 17
+                val hwMultWidth : Int = 18
               ) extends Module {
 
   val neuronCounterWidth = log2Ceil(maxNeurons)
@@ -187,8 +187,8 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
 
   // TODO: add multiplier latency based on W. --> It needs more if W == 32
   // constants
-  // val MULT_LATENCY = if (w > 17) {4} else {1}
-  val MULT_LATENCY = 1
+  val MULT_LATENCY = if (w > 17) {4} else {1}
+  // val MULT_LATENCY = 1
   println(s"Mult lantency is: $MULT_LATENCY")
   val LATENCY = sigmoid.LATENCY + 8 + 2*MULT_LATENCY + (MULT_LATENCY-1) // Latency input to output
   val THROUGHPUT = 1 // 1 synapse per cc
@@ -276,12 +276,10 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   val sigmoid_out = RegNext(sigmoid.io.y)
   val w_weight = weight_mems(LTCUnit_MemSel.w)(w_addr)
   val s_times_w_1 = Wire(FixedPoint(w.W, f.BP))
-  s_times_w_1 := sigmoid_out * w_weight
-  val s_times_w = ShiftRegister(Mux(
+  s_times_w_1 := Mux(
       current_synapse_active_shrg,
-        s_times_w_1, 
-        0.U.asFixedPoint(f.BP)
-    ), MULT_LATENCY)
+      sigmoid_out, 0.U.asFixedPoint(f.BP)) * w_weight
+  val s_times_w = ShiftRegister(s_times_w_1, MULT_LATENCY)
   val E_rev = weight_mems(LTCUnit_MemSel.erev)(Erev_addr)
 
   // activation accumulators
