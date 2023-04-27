@@ -133,12 +133,26 @@ class MyAccumulatorExampleModuleImp(outer: MyAccumulatorExample)(implicit p: Par
   * LTC Accelerator 
   */
 
-object LTCUnit_MemSel extends ChiselEnum {
+// Config Parameters (TODO: could be like Rocket-Config. Or this might be enough...)
+class LTCCoprocConfig(
+  val w : Int = 32, val f : Int = 16,
+  val maxNeurons: Int = 256, 
+  val ramBlockArrdWidth : Int = 9,
+  val hwMultWidth : Int = 18,
+  val sigmoid_lut_addr_w : Int = 6
+)  { 
+  val neuronCounterWidth = log2Ceil(maxNeurons)
+  val maxSynapses = pow(maxNeurons, 2).toInt
+  val synapseCounterWidth = log2Ceil(maxSynapses)
+}
+
+// --- Bundels and Enums ---
+object LTCUnit_WeightSel extends ChiselEnum {
   val mu, gamma, w, erev = Value
 }
 
-class LTCUnit_MemWrite(val w: Int, val addrWidth : Int) extends Bundle {
-  val writeSelect = LTCUnit_MemSel()
+class LTCUnit_WeightWrite(val w: Int, val addrWidth : Int) extends Bundle {
+  val writeSelect = LTCUnit_WeightSel()
   val writeAddr = UInt(addrWidth.W)
   val writeData = SInt(w.W)
 }
@@ -148,42 +162,57 @@ class LTCUnit_SparcityMatWrite(val addrWidth : Int) extends Bundle {
   val writeData = Bool()
 }
 
-class LTCUnit(  val w: Int = 32, val f: Int = 16, 
-                val maxNeurons: Int = 256, 
-                val ramBlockArrdWidth : Int = 9,
-                val hwMultWidth : Int = 18
-              ) extends Module {
+class LTCUnit_MemoryWriteIF(val w: Int, val synapseCounterWidth : Int, val ramBlockArrdWidth : Int, val neuronCounterWidth : Int) extends Bundle {
+  val N_out_neurons_write = Flipped(Valid(UInt(neuronCounterWidth.W)))
+  val sparcity_write = Flipped(Valid(new LTCUnit_SparcityMatWrite(synapseCounterWidth)))
+  val weight_write = Flipped(Valid(new LTCUnit_WeightWrite(w, ramBlockArrdWidth))) 
+}
 
-  val neuronCounterWidth = log2Ceil(maxNeurons)
-  val maxSynapses = pow(maxNeurons, 2).toInt
-  val synapseCounterWidth = log2Ceil(maxSynapses)
+// --- components --- (top down)
 
-  val io = IO(new Bundle {
+class LTCCore() extends Module {
+    val io = IO(new Bundle {
 
       val en          = Input(Bool())
-      val j           = Input(UInt(neuronCounterWidth.W)) 
-      val last_state = Input(Bool())
-      val x_z1        = Input(FixedPoint(w.W, f.BP))
-      val k           = Input(UInt(synapseCounterWidth.W))
       val fire        = Input(Bool())
 
       val busy    = Output(Bool())
       val done    = Output(Bool())
-      val act     = Output(FixedPoint(w.W, f.BP))
-      val rev_act = Output(FixedPoint(w.W, f.BP))
+
+      // val N_out_neurons_write = Flipped(Valid(UInt(neuronCounterWidth.W)))
+      // val memWrite.sparcity_write = Flipped(Valid(new LTCUnit_SparcityMatWrite(synapseCounterWidth)))
+      // val memWrite.weight_write = Flipped(Valid(new LTCUnit_WeightWrite(w, ramBlockArrdWidth))) // should be an input 😕
+      // val memWriteIF = LTCUnit_MemoryWriteIF(w, synapseCounterWidth, ramBlockArrdWidth, neuronCounterWidth)
+  })
+}
+
+class LTCUnit(  val config  : LTCCoprocConfig = new LTCCoprocConfig()
+              ) extends Module {
+
+  val io = IO(new Bundle {
+
+      val en          = Input(Bool())
+      val j           = Input(UInt(config.neuronCounterWidth.W)) 
+      val last_state = Input(Bool())
+      val x_z1        = Input(FixedPoint(config.w.W, config.f.BP))
+      val k           = Input(UInt(config.synapseCounterWidth.W))
+      val fire        = Input(Bool())
+
+      val busy    = Output(Bool())
+      val done    = Output(Bool())
+      val act     = Output(FixedPoint(config.w.W, config.f.BP))
+      val rev_act = Output(FixedPoint(config.w.W, config.f.BP))
 
       val valid   = Output(Bool())
 
-      val N_out_neurons_write = Flipped(Valid(UInt(neuronCounterWidth.W)))
-      val sparcity_write = Flipped(Valid(new LTCUnit_SparcityMatWrite(synapseCounterWidth)))
-      val mem_write = Flipped(Valid(new LTCUnit_MemWrite(w, ramBlockArrdWidth))) // should be an input 😕
+      val memWrite = new LTCUnit_MemoryWriteIF(config.w, config.synapseCounterWidth, config.ramBlockArrdWidth, config.neuronCounterWidth)
   })
 
   // component instantiation
-  val sigmoid = Module(new HardSigmoid(w, f)) // TODO add sigmoid lut_addr_w --> maybe define LTC Proc config in general somewhere, like rocket config
+  val sigmoid = Module(new HardSigmoid(config)) // TODO add sigmoid lut_addr_w --> maybe define LTC Proc config in general somewhere, like rocket config
 
   // constants
-  val MULT_LATENCY = if (w > 17) {4} else {1}
+  val MULT_LATENCY = if (config.w > 17) {4} else {1}
   // val MULT_LATENCY = 1
   println(s"Mult lantency is: $MULT_LATENCY")
   val LATENCY = sigmoid.LATENCY + 8 + 2*MULT_LATENCY + (MULT_LATENCY-1) // Latency input to output
@@ -194,27 +223,27 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   io <> DontCare
   sigmoid.io <> DontCare
 
-  val N_out_neurons = RegEnable(io.N_out_neurons_write.bits, 0.U, io.N_out_neurons_write.valid)
+  val N_out_neurons = RegEnable(io.memWrite.N_out_neurons_write.bits, 0.U, io.memWrite.N_out_neurons_write.valid)
 
   // memory definition
-  var weight_mems : Map[LTCUnit_MemSel.Type, SyncReadMem[FixedPoint] ] = Map()
-  LTCUnit_MemSel.all.foreach{
-    m => weight_mems += (m -> SyncReadMem(pow(2, ramBlockArrdWidth).toInt, FixedPoint(w.W, f.BP)))
+  var weight_mems : Map[LTCUnit_WeightSel.Type, SyncReadMem[FixedPoint] ] = Map()
+  LTCUnit_WeightSel.all.foreach{
+    m => weight_mems += (m -> SyncReadMem(pow(2, config.ramBlockArrdWidth).toInt, FixedPoint(config.w.W, config.f.BP)))
   }
-  val sparcity_mem = SyncReadMem(maxSynapses, Bool())
+  val sparcity_mem = SyncReadMem(config.maxSynapses, Bool())
 
   // memory write 
-  when(io.mem_write.fire) {
-    LTCUnit_MemSel.all.foreach{
+  when(io.memWrite.weight_write.fire) {
+    LTCUnit_WeightSel.all.foreach{
     m => {
-      when(io.mem_write.bits.writeSelect === m) {
-        weight_mems(m)(io.mem_write.bits.writeAddr) := io.mem_write.bits.writeData.asFixedPoint(f.BP)
+      when(io.memWrite.weight_write.bits.writeSelect === m) {
+        weight_mems(m)(io.memWrite.weight_write.bits.writeAddr) := io.memWrite.weight_write.bits.writeData.asFixedPoint(config.f.BP)
         }
       }
     }
   }
-  when(io.sparcity_write.fire) {
-    sparcity_mem(io.sparcity_write.bits.writeAddr) := io.sparcity_write.bits.writeData
+  when(io.memWrite.sparcity_write.fire) {
+    sparcity_mem(io.memWrite.sparcity_write.bits.writeAddr) := io.memWrite.sparcity_write.bits.writeData
   }
 
   // event signals
@@ -235,7 +264,7 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   current_synapse_active := sparcity_mem(io.k)
   val current_synapse_active_shrg = ShiftRegister(current_synapse_active, 5+MULT_LATENCY+sigmoid.LATENCY, io.en)
 
-  val active_synaps_counter_next = RegInit(0.U(synapseCounterWidth.W))
+  val active_synaps_counter_next = RegInit(0.U(config.synapseCounterWidth.W))
   when (active_synaps_cnt_rst) {
     active_synaps_counter_next := 0.U
   }.elsewhen (current_synapse_active && io.en) {
@@ -253,26 +282,26 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
 
   // datapath
   val x_in_shrg = ShiftRegister(io.x_z1, 3)
-  val mu = weight_mems(LTCUnit_MemSel.mu)(mu_addr)
+  val mu = weight_mems(LTCUnit_WeightSel.mu)(mu_addr)
   val x_minus_mu = RegNext(x_in_shrg - mu)
-  val gamma = weight_mems(LTCUnit_MemSel.gamma)(gamma_addr)
-  val sigmoid_in = Wire(FixedPoint(w.W, f.BP))
+  val gamma = weight_mems(LTCUnit_WeightSel.gamma)(gamma_addr)
+  val sigmoid_in = Wire(FixedPoint(config.w.W, config.f.BP))
   sigmoid_in := gamma * x_minus_mu
   sigmoid.io.x := ShiftRegister(sigmoid_in, MULT_LATENCY)
   val sigmoid_out = RegNext(sigmoid.io.y)
-  val w_weight = weight_mems(LTCUnit_MemSel.w)(w_addr)
-  val s_times_w_1 = Wire(FixedPoint(w.W, f.BP))
+  val w_weight = weight_mems(LTCUnit_WeightSel.w)(w_addr)
+  val s_times_w_1 = Wire(FixedPoint(config.w.W, config.f.BP))
   s_times_w_1 := Mux(
       current_synapse_active_shrg,
-      sigmoid_out, 0.U.asFixedPoint(f.BP)) * w_weight
+      sigmoid_out, 0.U.asFixedPoint(config.f.BP)) * w_weight
   val s_times_w = ShiftRegister(s_times_w_1, MULT_LATENCY)
-  val E_rev = weight_mems(LTCUnit_MemSel.erev)(Erev_addr)
+  val E_rev = weight_mems(LTCUnit_WeightSel.erev)(Erev_addr)
 
   // activation accumulators
   val act_accu = Reg(chiselTypeOf(io.act))
   val rev_act_accu = Reg(chiselTypeOf(io.rev_act))
 
-  val s_times_w_times_E_rev = Wire(FixedPoint(w.W, f.BP))
+  val s_times_w_times_E_rev = Wire(FixedPoint(config.w.W, config.f.BP))
   s_times_w_times_E_rev := (s_times_w * E_rev)
 
   val s_times_w_reg = ShiftRegister(s_times_w, MULT_LATENCY-1)  
@@ -298,17 +327,17 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
 
 }
 
-class HardSigmoid(val w: Int = 32, val f: Int = 16, lut_addr_w: Int = 6) extends Module {
+class HardSigmoid(val config : LTCCoprocConfig) extends Module {
   val io = IO(new Bundle {
-    val x = Input(FixedPoint(w.W, f.BP))
-    val y = Output(FixedPoint(w.W, f.BP))
+    val x = Input(FixedPoint(config.w.W, config.f.BP))
+    val y = Output(FixedPoint(config.w.W, config.f.BP))
   })
 
   val LATENCY : Int = 2
-  val lut_len : Int = pow(2, lut_addr_w).toInt
+  val lut_len : Int = pow(2, config.sigmoid_lut_addr_w).toInt
   val step_size : Double = 8.0/lut_len
 
-  require(lut_len >= 8, s"HardSigmoid lut_len must be >= 8 - lut_len is $lut_len with lut_addr_w $lut_addr_w")
+  require(lut_len >= 8, s"HardSigmoid lut_len must be >= 8 - lut_len is $lut_len with lut_addr_w ${config.sigmoid_lut_addr_w}")
 
   // translated from python GenerateSigmoidErrorLut.py (thanks ChatGTP!)
   def getErrorLUT() : (Array[Double], Double, Double) = {
@@ -350,26 +379,26 @@ class HardSigmoid(val w: Int = 32, val f: Int = 16, lut_addr_w: Int = 6) extends
 
   // generate and quantize error LUT
   val (error_lut_d, x_min_d, x_max_d) = getErrorLUT()
-  val error_lut_quant = error_lut_d.map(x => round(x*pow(2.0d,f)).toInt)
+  val error_lut_quant = error_lut_d.map(x => round(x*pow(2.0d,config.f)).toInt)
   val max_entry = blinag.max(blinag.DenseVector[Int](error_lut_quant))
   val rom_bit_w = log2Ceil(max_entry)
   val rom_lut_memory_bits = rom_bit_w * lut_len
   println(s"using $rom_bit_w bits for $lut_len entries in Sigmoid Error LUT --> LUT requires $rom_lut_memory_bits bits")
   println(s"Correcting Error in the range from $x_min_d to $x_max_d")
 
-  val lut_x_shift = lut_addr_w-3 // b.c. fixed x_max of 8
+  val lut_x_shift = config.sigmoid_lut_addr_w-3 // b.c. fixed x_max of 8
   val rom_lut = VecInit(error_lut_quant.map(_.U(rom_bit_w.W)))
 
-  val x_sign = (io.x > FixedPoint(0, w.W, f.BP))
+  val x_sign = (io.x > FixedPoint(0, config.w.W, config.f.BP))
   val x_sign_shrg = ShiftRegister(x_sign, 2, true.B)
 
   // linear interpolation
-  val y_interpolated_raw = (io.x >> 2) + FixedPoint.fromDouble(0.5, w.W, f.BP)
+  val y_interpolated_raw = (io.x >> 2) + FixedPoint.fromDouble(0.5, config.w.W, config.f.BP)
   val y_interpolated = MuxCase(
     y_interpolated_raw, // default
     Array(
-      (io.x < FixedPoint.fromDouble(-2.0, w.W, f.BP)) -> FixedPoint.fromDouble(0.0, w.W, f.BP),
-      (io.x > FixedPoint.fromDouble(+2.0, w.W, f.BP)) -> FixedPoint.fromDouble(1.0, w.W, f.BP)
+      (io.x < FixedPoint.fromDouble(-2.0, config.w.W, config.f.BP)) -> FixedPoint.fromDouble(0.0, config.w.W, config.f.BP),
+      (io.x > FixedPoint.fromDouble(+2.0, config.w.W, config.f.BP)) -> FixedPoint.fromDouble(1.0, config.w.W, config.f.BP)
       )
     )
   val y_interpolated_shrg = ShiftRegister(y_interpolated, 2, true.B)
@@ -378,16 +407,16 @@ class HardSigmoid(val w: Int = 32, val f: Int = 16, lut_addr_w: Int = 6) extends
   val x_abs = io.x.abs()
 
   def getErrorLutAddr(x : FixedPoint ) : UInt = {
-    val addr = (x.asUInt >> (f - lut_x_shift).asUInt) + ((x.asUInt)(f - lut_x_shift -1))
-    Mux((x >= FixedPoint.fromDouble(8.0, w.W, f.BP)), 0.U, addr)
+    val addr = (x.asUInt >> (config.f - lut_x_shift).asUInt) + ((x.asUInt)(config.f - lut_x_shift -1))
+    Mux((x >= FixedPoint.fromDouble(8.0, config.w.W, config.f.BP)), 0.U, addr)
   }
 
-  val addr = Reg(UInt(lut_addr_w.W))
+  val addr = Reg(UInt(config.sigmoid_lut_addr_w.W))
   addr := getErrorLutAddr(x_abs)
-  val e_reg = Reg(FixedPoint(w.W, f.BP))
-  val e = Wire(UInt(w.W))
+  val e_reg = Reg(FixedPoint(config.w.W, config.f.BP))
+  val e = Wire(UInt(config.w.W))
   e := rom_lut(addr)
-  e_reg := e.asFixedPoint(f.BP) 
+  e_reg := e.asFixedPoint(config.f.BP) 
   // printf(cf"addr = $addr - e = $e \n")
 
   // output

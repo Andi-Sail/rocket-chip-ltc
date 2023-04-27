@@ -5,7 +5,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.stage.PrintFullStackTraceAnnotation
 import org.scalatest.funsuite.AnyFunSuite
 
-import freechips.rocketchip.tile.{LTCUnit, HardSigmoid, LTCUnit_MemSel}
+import freechips.rocketchip.tile.{LTCUnit, HardSigmoid, LTCUnit_WeightSel}
 import chisel3.experimental.FixedPoint
 
 import  Array._
@@ -15,6 +15,7 @@ import breeze.linalg.trace
 // JSON reader
 import io.circe._
 import io.circe.parser._
+import freechips.rocketchip.tile.LTCCoprocConfig
 
 
 // sigmoid test independed of HW implementation
@@ -22,7 +23,7 @@ class SigmoidLUTTest extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "HardSigmoid" 
   it should "generate a correct fix16 error LUT" in {
     test(
-      new HardSigmoid(w=32, f=16, lut_addr_w=6)
+      new HardSigmoid(new LTCCoprocConfig(w=32, f=16, sigmoid_lut_addr_w=6))
       ) { c =>
         // expected LUTs generated with: python3 GenerateSigmoidErrorLut.py -la 6
         println("Checking float LUT")
@@ -45,7 +46,7 @@ class SigmoidLUTTest extends AnyFlatSpec with ChiselScalatestTester {
   }
   it should "generate a correct fix8 error LUT" in {
     test(
-      new HardSigmoid(w=16, f=8, lut_addr_w=7)
+      new HardSigmoid(new LTCCoprocConfig(w=16, f=8, sigmoid_lut_addr_w=7))
       ) { c =>
         // expected LUTs generated with: python3 GenerateSigmoidErrorLut.py -la 7
         println("Checking float LUT")
@@ -95,7 +96,7 @@ class SigmoidImplTest extends AnyFlatSpec with ChiselScalatestTester {
       val W = fix*2
       val F = fix
       test(
-        new HardSigmoid(w=W, f=F, lut_addr_w=lut_addr_config), 
+        new HardSigmoid(new LTCCoprocConfig(w=W, f=F, sigmoid_lut_addr_w=lut_addr_config)), 
         ).withAnnotations(Seq(
           WriteVcdAnnotation, 
           treadle.WriteCoverageCSVAnnotation,
@@ -148,7 +149,7 @@ class LTCUnit_Latency_test extends AnyFlatSpec with ChiselScalatestTester {
   for (w <- Seq(16,32))
   {
     it should s"check the latency of the LTC Unit with w=$w" in {
-      test(new LTCUnit(w=w, f=w/2)).withAnnotations(Seq(PrintFullStackTraceAnnotation)) { c =>
+      test(new LTCUnit(new LTCCoprocConfig(w=w, f=w/2))).withAnnotations(Seq(PrintFullStackTraceAnnotation)) { c =>
         val exp_mult_latency = if (w > 17) {4} else {1}
         val exp_latency = 2 + 8 + 2*exp_mult_latency + (exp_mult_latency-1)
         assert(c.LATENCY == exp_latency)
@@ -169,14 +170,14 @@ class LTCUnit_Datapath_test extends AnyFlatSpec with ChiselScalatestTester {
       c.io.j.poke(0.U)
       
       // write some value to N_out_neurons_write
-      c.io.N_out_neurons_write.bits.poke(N_out_neurons_test.U)
-      c.io.N_out_neurons_write.valid.poke(true.B)
+      c.io.memWrite.N_out_neurons_write.bits.poke(N_out_neurons_test.U)
+      c.io.memWrite.N_out_neurons_write.valid.poke(true.B)
       
       c.clock.step()
       c.io.en.poke(true.B)
 
-      c.io.N_out_neurons_write.bits.poke(42.U)
-      c.io.N_out_neurons_write.valid.poke(false.B)
+      c.io.memWrite.N_out_neurons_write.bits.poke(42.U)
+      c.io.memWrite.N_out_neurons_write.valid.poke(false.B)
       // check done is low
       c.io.done.expect(false.B, s"done is set before anything happens")
       
@@ -220,44 +221,44 @@ class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
       c.clock.step()
 
       // write N out neurons
-      c.io.N_out_neurons_write.bits.poke(N_neurons)
-      c.io.N_out_neurons_write.valid.poke(true)
+      c.io.memWrite.N_out_neurons_write.bits.poke(N_neurons)
+      c.io.memWrite.N_out_neurons_write.valid.poke(true)
       c.clock.step()
-      c.io.N_out_neurons_write.valid.poke(false)
+      c.io.memWrite.N_out_neurons_write.valid.poke(false)
       c.clock.step()
 
       // write sparcity
       println("writing someting to sparcity")
       var current_synapse_active = true
-      c.io.sparcity_write.valid.poke(true.B)
+      c.io.memWrite.sparcity_write.valid.poke(true.B)
       for (i <- 0 until N_neurons)
       {
         for (j <- 0 until N_neurons)
         {
           val addr = i*N_neurons + j
           // println(s"writing $current_synapse_active to $addr")
-          c.io.sparcity_write.bits.writeAddr.poke(addr)
-          c.io.sparcity_write.bits.writeData.poke(current_synapse_active)
+          c.io.memWrite.sparcity_write.bits.writeAddr.poke(addr)
+          c.io.memWrite.sparcity_write.bits.writeData.poke(current_synapse_active)
           c.clock.step()
           current_synapse_active = !current_synapse_active // just use every 2nd active to test writing
         }
       }
-      c.io.sparcity_write.valid.poke(false)
+      c.io.memWrite.sparcity_write.valid.poke(false)
 
       c.clock.step()
 
-      c.io.mem_write.valid.poke(true)
-      LTCUnit_MemSel.all.foreach{ m =>
+      c.io.memWrite.weight_write.valid.poke(true)
+      LTCUnit_WeightSel.all.foreach{ m =>
         println(s"writing something to $m")
-        c.io.mem_write.bits.writeSelect.poke(m)
+        c.io.memWrite.weight_write.bits.writeSelect.poke(m)
         for (i <- 0 until (N_neurons*N_neurons / 2)) // only half of the weights since half of the synapses are inactive
         {
-          c.io.mem_write.bits.writeAddr.poke(i)
-          c.io.mem_write.bits.writeData.poke(i*2)
+          c.io.memWrite.weight_write.bits.writeAddr.poke(i)
+          c.io.memWrite.weight_write.bits.writeData.poke(i*2)
           c.clock.step()
         }
       }
-      c.io.mem_write.valid.poke(false)
+      c.io.memWrite.weight_write.valid.poke(false)
 
       // activate unit and feed some states
       c.io.en.poke(true)
@@ -301,41 +302,25 @@ class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
 class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "LTCUnit"
 
+  
   // emit Verilog for test synthesis (this is independent of the tests below)
-  (new chisel3.stage.ChiselStage).emitVerilog(new LTCUnit(w=32, f=16))
+  val verilog_config = new LTCCoprocConfig(w=32, f=16)
+  (new chisel3.stage.ChiselStage).emitVerilog(new LTCUnit(verilog_config))
 
   for (W <- Seq(16,32))
-  // for (W <- Seq(32))
   {
     val F = W / 2
+    val config = new LTCCoprocConfig(w=W, f=F)
 
-    // load model definition from C-header file (if it works it ain't stupit 🙃)
-    val cHeaderString: String = scala.io.Source.fromFile(s"testdata/sandbox_ltc.h").mkString
-    val units = """(\d+)""".r.findFirstIn("""#define units (\d+)""".r.findFirstIn(cHeaderString).get).get.toInt
-    val ode_synapses = """(\d+)""".r.findFirstIn("""#define ode_synapses (\d+)""".r.findFirstIn(cHeaderString).get).get.toInt
-    val rnn_ltc_cell_sigma_0_sparse = s"fix${F}_t rnn_ltc_cell_sigma_0_sparse\\[${ode_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
-    val rnn_ltc_cell_mu_0_sparse    = s"fix${F}_t rnn_ltc_cell_mu_0_sparse\\[${ode_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
-    val rnn_ltc_cell_w_0_sparse     = s"fix${F}_t rnn_ltc_cell_w_0_sparse\\[${ode_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
-    val rnn_ltc_cell_erev_0_sparse  = s"fix${F}_t rnn_ltc_cell_erev_0_sparse\\[${ode_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
-    val weigth_map = Map(
-      LTCUnit_MemSel.gamma -> rnn_ltc_cell_sigma_0_sparse,
-      LTCUnit_MemSel.mu    -> rnn_ltc_cell_mu_0_sparse,
-      LTCUnit_MemSel.w     -> rnn_ltc_cell_w_0_sparse,
-      LTCUnit_MemSel.erev  -> rnn_ltc_cell_erev_0_sparse,
-    )
-    // NOTE: sparcity_matrix is not transposed!!!!
-    val sparcity_matrix = s"int adjacency_matrix\\[${units}\\]\\[${units}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString)
-    .map{m => m.group(1)}.get.split("""\},\{""")
-    .map{s => s.replace("""{""", "").replace("""}""", "").split(',').map(x => abs(x.trim.toInt)).toList}
+    // load model definition and weights
+    val (units, ode_synapses, weigth_map, sparcity_matrix) = LTCTestDataUtil.ReadLTCModelFromHeader("testdata/sandbox_ltc.h", F)
 
     // load rocc input and output values from json
-    val jsonString = scala.io.Source.fromFile(s"testdata/sandbox_fix${F}_rocc.json").mkString
-    val json = parse(jsonString).getOrElse(Json.Null)
-    val ltc_rocc_values = json.as[Array[Map[String, Array[Int]]]].toSeq(0)
+    val ltc_rocc_values = LTCTestDataUtil.LoadLTCRoCCStimuli(s"testdata/sandbox_fix${F}_rocc.json")
     
     it should s"run sandbox model with fix$F" in {
 
-      test(new LTCUnit(w=W, f=F)).withAnnotations(Seq(
+      test(new LTCUnit(config)).withAnnotations(Seq(
         WriteVcdAnnotation,
         PrintFullStackTraceAnnotation)) { c =>
         c.clock.step() // step reset
@@ -344,43 +329,8 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
         c.io.k.poke(0.U)
         c.clock.step()
 
-        // write N out neurons
-        c.io.N_out_neurons_write.bits.poke(units)
-        c.io.N_out_neurons_write.valid.poke(true)
-        c.clock.step()
-        c.io.N_out_neurons_write.valid.poke(false)
-        c.clock.step()
-
-        // write sparcity
-        println("writing someting to sparcity")
-        c.io.sparcity_write.valid.poke(true.B)
-        for (i <- 0 until units)
-        {
-          for (j <- 0 until units)
-          {
-            val addr = i*units + j
-            c.io.sparcity_write.bits.writeAddr.poke(addr)
-            c.io.sparcity_write.bits.writeData.poke(sparcity_matrix(j)(i)) // NOTE: mat is transposed here!!!!!!!!!
-            c.clock.step()
-          }
-        }
-        c.io.sparcity_write.valid.poke(false)
-
-        c.clock.step()
-
-        // write memories
-        c.io.mem_write.valid.poke(true)
-        LTCUnit_MemSel.all.foreach{ m =>
-          println(s"writing something to $m")
-          c.io.mem_write.bits.writeSelect.poke(m)
-          for (i <- 0 until ode_synapses)
-          {
-            c.io.mem_write.bits.writeAddr.poke(i)
-            c.io.mem_write.bits.writeData.poke(weigth_map(m)(i).asSInt(W.W)) 
-            c.clock.step()
-          }
-        }
-        c.io.mem_write.valid.poke(false)
+        LTCTestUtil.WriteModelData2Unit(c.io.memWrite, c.clock, config,
+          units, ode_synapses, weigth_map, sparcity_matrix)
 
         for (test_run <- 0 until ltc_rocc_values.size)
         {
