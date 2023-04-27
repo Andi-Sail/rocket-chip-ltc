@@ -6,6 +6,8 @@ import scala.sys.process._
 enablePlugins(PackPlugin)
 
 val chiselVersion = "3.5.6"
+val circeVersion = "0.14.1"
+
 
 lazy val commonSettings = Seq(
   organization := "edu.berkeley.cs",
@@ -14,10 +16,16 @@ lazy val commonSettings = Seq(
   parallelExecution in Global := false,
   traceLevel   := 15,
   scalacOptions ++= Seq("-deprecation","-unchecked"),
+  scalacOptions ++= Seq("-g:vars"),
   libraryDependencies ++= Seq("org.scala-lang" % "scala-reflect" % scalaVersion.value),
   libraryDependencies ++= Seq("org.json4s" %% "json4s-jackson" % "3.6.6"),
   libraryDependencies ++= Seq("org.scalatest" %% "scalatest" % "3.2.0" % "test"),
   libraryDependencies ++= Seq("org.scalanlp" %% "breeze" % "2.1.0"),
+  libraryDependencies ++= Seq(
+    "io.circe" %% "circe-core",
+    "io.circe" %% "circe-generic",
+    "io.circe" %% "circe-parser"
+  ).map(_ % circeVersion),
   resolvers ++= Seq(
     Resolver.sonatypeRepo("snapshots"),
     Resolver.sonatypeRepo("releases"),

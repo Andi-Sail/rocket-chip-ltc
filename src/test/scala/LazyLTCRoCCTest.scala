@@ -12,6 +12,10 @@ import  Array._
 import scala.math._
 import breeze.linalg.trace
 
+// JSON reader
+import io.circe._
+import io.circe.parser._
+
 
 // sigmoid test independed of HW implementation
 class SigmoidLUTTest extends AnyFlatSpec with ChiselScalatestTester {
@@ -296,45 +300,42 @@ class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
 
 class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "LTCUnit"
+
+  // emit Verilog for test synthesis (this is independent of the tests below)
   (new chisel3.stage.ChiselStage).emitVerilog(new LTCUnit(w=32, f=16))
 
-  val W = 32
-  val F = 16
-  it should "run sandbox model" in {
-    val units = 12
-    val ode_synapses = 40 
-    val rnn_ltc_cell_sigma_0_sparse = Array(367613,255819,338817,229012,459762,222331,223539,484417,241515,242545,453483,301777,421650,206624,310783,245134,361151,369960,395552,260044,512156,320299,463401,342041,344477,337268,437710,311044,222575,323588,475809,463067,390843,478371,348468,510568,217154,403005,384321,327194)
-    val rnn_ltc_cell_mu_0_sparse    = Array(49441,40634,41717,31924,41710,21278,43594,39012,23347,47881,40233,28271,40225,46320,24970,49039,23197,23625,24707,31425,41313,27711,30383,36998,28348,41328,36814,47927,48423,25881,40413,34082,21574,33754,22025,35257,50172,23325,30692,27171)
-    val rnn_ltc_cell_w_0_sparse     = Array(9293,62978,25670,34177,24137,25361,2778,27216,12473,32812,51483,29373,48858,5795,180,53725,23950,10882,1558,27727,23090,53398,60116,34631,29276,41646,19252,42895,19090,49614,2803,39301,45945,52478,64255,14678,60613,26829,32834,58293)
-    val rnn_ltc_cell_erev_0_sparse  = Array(-65536,-65536,65536,-65536,65536,65536,-65536,65536,65536,65536,-65536,-65536,65536,65536,65536,65536,65536,-65536,-65536,65536,65536,-65536,-65536,-65536,65536,-65536,-65536,65536,65536,65536,65536,65536,65536,65536,-65536,-65536,-65536,65536,65536,65536)
+  for (W <- Seq(16,32))
+  // for (W <- Seq(32))
+  {
+    val F = W / 2
+
+    // load model definition from C-header file (if it works it ain't stupit 🙃)
+    val cHeaderString: String = scala.io.Source.fromFile(s"testdata/sandbox_ltc.h").mkString
+    val units = """(\d+)""".r.findFirstIn("""#define units (\d+)""".r.findFirstIn(cHeaderString).get).get.toInt
+    val ode_synapses = """(\d+)""".r.findFirstIn("""#define ode_synapses (\d+)""".r.findFirstIn(cHeaderString).get).get.toInt
+    val rnn_ltc_cell_sigma_0_sparse = s"fix${F}_t rnn_ltc_cell_sigma_0_sparse\\[${ode_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
+    val rnn_ltc_cell_mu_0_sparse    = s"fix${F}_t rnn_ltc_cell_mu_0_sparse\\[${ode_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
+    val rnn_ltc_cell_w_0_sparse     = s"fix${F}_t rnn_ltc_cell_w_0_sparse\\[${ode_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
+    val rnn_ltc_cell_erev_0_sparse  = s"fix${F}_t rnn_ltc_cell_erev_0_sparse\\[${ode_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
     val weigth_map = Map(
-       LTCUnit_MemSel.gamma -> rnn_ltc_cell_sigma_0_sparse,
-       LTCUnit_MemSel.mu    -> rnn_ltc_cell_mu_0_sparse,
-       LTCUnit_MemSel.w     -> rnn_ltc_cell_w_0_sparse,
-       LTCUnit_MemSel.erev  -> rnn_ltc_cell_erev_0_sparse,
+      LTCUnit_MemSel.gamma -> rnn_ltc_cell_sigma_0_sparse,
+      LTCUnit_MemSel.mu    -> rnn_ltc_cell_mu_0_sparse,
+      LTCUnit_MemSel.w     -> rnn_ltc_cell_w_0_sparse,
+      LTCUnit_MemSel.erev  -> rnn_ltc_cell_erev_0_sparse,
     )
-    
-    val sparcity_matrix             = Array(Array(0,0,0,0,0,0,0,0,0,0,0,0),Array(0,0,0,0,0,0,0,0,0,0,0,0),Array(1,1,0,0,0,0,1,0,0,0,0,0),Array(1,1,0,0,0,1,0,0,0,0,0,0),Array(1,1,0,1,1,0,1,0,0,0,0,0),Array(1,1,1,0,0,0,0,0,0,0,0,0),Array(1,0,0,0,0,0,0,0,0,0,0,0),Array(0,0,1,1,1,1,1,0,0,0,0,0),Array(0,0,1,1,1,1,1,0,0,0,0,0),Array(0,0,1,1,1,1,1,0,0,0,0,0),Array(0,0,1,1,1,1,1,0,0,0,0,0),Array(0,0,1,1,1,1,1,0,0,0,0,0))
     // NOTE: sparcity_matrix is not transposed!!!!
+    val sparcity_matrix = s"int adjacency_matrix\\[${units}\\]\\[${units}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString)
+    .map{m => m.group(1)}.get.split("""\},\{""")
+    .map{s => s.replace("""{""", "").replace("""}""", "").split(',').map(x => abs(x.trim.toInt)).toList}
 
-    val states_1 = Array(0,0,0,0,0,0,0,0,0,0,0,0) 
-    val rev_activation_1 = Array(-9733,9148,-899,8602,-8787,16187,-1767,0,0,0,0,0) 
-    val activation1 = Array(12179,9676,7749,11492,14369,16187,25675,0,0,0,0,0) 
-    val states_2 = Array(-2644,1959,1735,2828,-4183,5481,-499,-8044,492,4381,5690,-5201) 
-    val rev_activation_2 = Array(-11819,9995,841,7387,-6574,14568,1161,0,0,0,0,0) 
-    val activation2 = Array(13681,10587,9157,10437,13666,14568,24237,0,0,0,0,0) 
+    // load rocc input and output values from json
+    val jsonString = scala.io.Source.fromFile(s"testdata/sandbox_fix${F}_rocc.json").mkString
+    val json = parse(jsonString).getOrElse(Json.Null)
+    val ltc_rocc_values = json.as[Array[Map[String, Array[Int]]]].toSeq(0)
+    
+    it should s"run sandbox model with fix$F" in {
 
-    val test_states = Array(states_1, states_2)
-    val test_rev_activation = Array(rev_activation_1, rev_activation_2)
-    val test_activation = Array(activation1, activation2)
-
-    for (test_run <- 0 to 1)
-    {
-      val states = test_states(test_run)
-      val rev_activation = test_rev_activation(test_run)
-      val activation = test_activation(test_run)
-
-      test(new LTCUnit).withAnnotations(Seq(
+      test(new LTCUnit(w=W, f=F)).withAnnotations(Seq(
         WriteVcdAnnotation,
         PrintFullStackTraceAnnotation)) { c =>
         c.clock.step() // step reset
@@ -360,7 +361,6 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
             val addr = i*units + j
             c.io.sparcity_write.bits.writeAddr.poke(addr)
             c.io.sparcity_write.bits.writeData.poke(sparcity_matrix(j)(i)) // NOTE: mat is transposed here!!!!!!!!!
-            // c.io.sparcity_write.bits.writeData.poke(1) // NOTE: mat is transposed here!!!!!!!!!
             c.clock.step()
           }
         }
@@ -376,65 +376,72 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
           for (i <- 0 until ode_synapses)
           {
             c.io.mem_write.bits.writeAddr.poke(i)
-            c.io.mem_write.bits.writeData.poke(("b" + weigth_map(m)(i).toBinaryString ).U(W.W)) // strange conversion but it works 🤷
+            c.io.mem_write.bits.writeData.poke(weigth_map(m)(i).asSInt(W.W)) 
             c.clock.step()
           }
         }
         c.io.mem_write.valid.poke(false)
 
-        // activate unit and feed some states
-        c.io.en.poke(true)
-        fork{ timescope{
-          c.io.fire.poke(true)
-          c.clock.step()
-        }}
-
-        // feed input
-        fork {
-          var k = 0
-          for (j <- 0 until units)
-          {
-            c.io.j.poke(j)
-            for (i <- 0 until units)
-            {
-              c.io.k.poke(k)
-              // c.io.x_z1.poke(FixedPoint(i+1, W.W, F.BP))
-              if (i > 0) {
-                c.io.x_z1.poke(FixedPoint(states(i-1), W.W, F.BP))
-              }
-
-              fork {timescope{
-                c.io.last_state.poke(i === (units-1))
-                c.clock.step()
-              }}
-    
-              c.clock.step()
-    
-              c.io.busy.expect(true)
-              k += 1
-            }
-            c.io.x_z1.poke(FixedPoint(states(units-1), W.W, F.BP))
-          }
-          c.clock.step()
-        } 
-
-        for (out_cnt <- 0 until units)
+        for (test_run <- 0 until ltc_rocc_values.size)
         {
-          while (!c.io.valid.peekBoolean())
+          println(s"fix_$F test - iteration $test_run")
+          val states = ltc_rocc_values(test_run)("states")
+          val rev_activation = ltc_rocc_values(test_run)("rev_activation")
+          val activation = ltc_rocc_values(test_run)("activation")
+
+          // activate unit and feed some states
+          c.io.en.poke(true)
+          fork{ timescope{
+            c.io.fire.poke(true)
+            c.clock.step()
+          }}
+
+          // feed input
+          fork {
+            var k = 0
+            for (j <- 0 until units)
+            {
+              c.io.j.poke(j)
+              for (i <- 0 until units)
+              {
+                c.io.k.poke(k)
+                if (i > 0) {
+                  c.io.x_z1.poke(FixedPoint(states(i-1), W.W, F.BP))
+                }
+
+                fork {timescope{
+                  c.io.last_state.poke(i === (units-1))
+                  c.clock.step()
+                }}
+      
+                c.clock.step()
+      
+                c.io.busy.expect(true)
+                k += 1
+              }
+              c.io.x_z1.poke(FixedPoint(states(units-1), W.W, F.BP))
+            }
+            c.clock.step()
+          } 
+
+          for (out_cnt <- 0 until units)
           {
+            while (!c.io.valid.peekBoolean())
+            {
+              c.clock.step()
+            }
+            c.io.act.expect(FixedPoint(activation(out_cnt), W.W, F.BP), s"act missmatch for neuron $out_cnt in test run $test_run")
+            c.io.rev_act.expect(FixedPoint(rev_activation(out_cnt), W.W, F.BP), s"rev_act missmatch for neuron $out_cnt in test run $test_run")
             c.clock.step()
           }
-          c.io.act.expect(FixedPoint(activation(out_cnt), W.W, F.BP), s"act missmatch for neuron $out_cnt in test run $test_run")
-          c.io.rev_act.expect(FixedPoint(rev_activation(out_cnt), W.W, F.BP), s"rev_act missmatch for neuron $out_cnt in test run $test_run")
+          
+          c.io.done.expect(true)
           c.clock.step()
+          c.clock.step()
+          c.io.busy.expect(false)
+          c.clock.step(scala.util.Random.between(10,200))
+          c.io.busy.expect(false)
         }
-        
-        c.io.done.expect(true)
-        c.clock.step()
-        c.clock.step()
-        c.io.busy.expect(false)
-        c.clock.step(200)
-        c.io.busy.expect(false)
       }
     }
   }

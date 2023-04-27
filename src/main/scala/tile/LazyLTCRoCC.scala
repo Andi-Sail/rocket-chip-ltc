@@ -139,12 +139,12 @@ object LTCUnit_MemSel extends ChiselEnum {
 
 class LTCUnit_MemWrite(val w: Int, val addrWidth : Int) extends Bundle {
   val writeSelect = LTCUnit_MemSel()
-  val writeAddr = Bits(addrWidth.W)
-  val writeData = Bits(w.W)
+  val writeAddr = UInt(addrWidth.W)
+  val writeData = SInt(w.W)
 }
 
 class LTCUnit_SparcityMatWrite(val addrWidth : Int) extends Bundle {
-  val writeAddr = Bits(addrWidth.W)
+  val writeAddr = UInt(addrWidth.W)
   val writeData = Bool()
 }
 
@@ -177,15 +177,11 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
       val N_out_neurons_write = Flipped(Valid(UInt(neuronCounterWidth.W)))
       val sparcity_write = Flipped(Valid(new LTCUnit_SparcityMatWrite(synapseCounterWidth)))
       val mem_write = Flipped(Valid(new LTCUnit_MemWrite(w, ramBlockArrdWidth))) // should be an input 😕
-
-      val dummy_toggler_out = Output(Bool())
-      val time_out = Output(UInt(32.W))
   })
 
   // component instantiation
   val sigmoid = Module(new HardSigmoid(w, f)) // TODO add sigmoid lut_addr_w --> maybe define LTC Proc config in general somewhere, like rocket config
 
-  // TODO: add multiplier latency based on W. --> It needs more if W == 32
   // constants
   val MULT_LATENCY = if (w > 17) {4} else {1}
   // val MULT_LATENCY = 1
@@ -197,16 +193,6 @@ class LTCUnit(  val w: Int = 32, val f: Int = 16,
   // default assigment to remove errors during development 
   io <> DontCare
   sigmoid.io <> DontCare
-  val dummy_toggler = RegInit(false.B)
-  dummy_toggler := !dummy_toggler
-  io.dummy_toggler_out := dummy_toggler
-
-  val time_reg = RegInit(0.U(32.W))
-  when (io.en) {
-    time_reg := time_reg + 1.U
-  }
-  io.time_out := time_reg
-
 
   val N_out_neurons = RegEnable(io.N_out_neurons_write.bits, 0.U, io.N_out_neurons_write.valid)
 
