@@ -139,11 +139,19 @@ class LTCCoprocConfig(
   val maxNeurons: Int = 256, 
   val ramBlockArrdWidth : Int = 9,
   val hwMultWidth : Int = 18,
-  val sigmoid_lut_addr_w : Int = 6
+  val sigmoid_lut_addr_w : Int = 6, 
+  val N_Units : Int = 4,
+  val ltc_out_queue_size : Int = 10,
+  // from core parameters
+  val xLen : Int = 32,
+
+  val DEBUG : Boolean = true
 )  { 
   val neuronCounterWidth = log2Ceil(maxNeurons)
   val maxSynapses = pow(maxNeurons, 2).toInt
   val synapseCounterWidth = log2Ceil(maxSynapses)
+
+  val UnitAddrWidth = log2Ceil(N_Units)
 }
 
 // --- Bundels and Enums ---
@@ -166,27 +174,156 @@ class LTCUnit_MemoryWriteIF(val w: Int, val synapseCounterWidth : Int, val ramBl
   val N_out_neurons_write = Flipped(Valid(UInt(neuronCounterWidth.W)))
   val sparcity_write = Flipped(Valid(new LTCUnit_SparcityMatWrite(synapseCounterWidth)))
   val weight_write = Flipped(Valid(new LTCUnit_WeightWrite(w, ramBlockArrdWidth))) 
+
+  val valids = this.getElements.toSeq.collect{ case valid: Valid[_] => valid.valid }
 }
+
+class LTCUnit_DataOut(val config : LTCCoprocConfig) extends Bundle {
+  val act     = FixedPoint(config.w.W, config.f.BP)
+  val rev_act = FixedPoint(config.w.W, config.f.BP)
+}
+
+class LTCUnit_CSR(val config : LTCCoprocConfig) extends Bundle {
+  val unit_out_missed_count = Output(UInt(config.xLen.W))
+}
+
+class LTCCore_StateWrite(val config : LTCCoprocConfig) extends Bundle {
+  val stateAddr = UInt(config.neuronCounterWidth.W)
+  val stateValue = SInt(config.w.W)
+}
+
+class LTCCore_MemoryWriteIF(val config : LTCCoprocConfig) extends Bundle {
+  val UnitMemWrite = new LTCUnit_MemoryWriteIF(config.w, config.synapseCounterWidth, config.ramBlockArrdWidth, config.neuronCounterWidth)
+  val UnitAddr = Input(UInt(config.UnitAddrWidth.W))
+
+  val stateWrite = Flipped(Valid(new LTCCore_StateWrite(config)))
+
+  val N_Neurons_write = Flipped(Valid(UInt(config.neuronCounterWidth.W)))
+  val Max_out_Neurons_write = Flipped(Valid(UInt(config.neuronCounterWidth.W)))
+  val Max_synapses_write = Flipped(Valid(UInt(config.synapseCounterWidth.W)))
+  val result_addr = Flipped(Valid(UInt(config.xLen.W)))
+}
+
+class LTCCore_CSR(val config : LTCCoprocConfig) extends Bundle {
+  val units_csr = (0 until config.N_Units).map { i => new LTCUnit_CSR(config) }.toList
+  // (0 until config.N_Units).map{ i => Module(new LTCUnit(config, unitID=i))}.toList
+}
+
 
 // --- components --- (top down)
 
-class LTCCore() extends Module {
-    val io = IO(new Bundle {
-
+class LTCCore(config : LTCCoprocConfig) extends Module {
+  val io = IO(new Bundle {
       val en          = Input(Bool())
       val fire        = Input(Bool())
 
       val busy    = Output(Bool())
       val done    = Output(Bool())
 
-      // val N_out_neurons_write = Flipped(Valid(UInt(neuronCounterWidth.W)))
-      // val memWrite.sparcity_write = Flipped(Valid(new LTCUnit_SparcityMatWrite(synapseCounterWidth)))
-      // val memWrite.weight_write = Flipped(Valid(new LTCUnit_WeightWrite(w, ramBlockArrdWidth))) // should be an input 😕
-      // val memWriteIF = LTCUnit_MemoryWriteIF(w, synapseCounterWidth, ramBlockArrdWidth, neuronCounterWidth)
+      val memWrite = new LTCCore_MemoryWriteIF(config)
+
+      // temp test outputs
+      val chosen_out = Output(UInt(32.W))
+      val data_out = Output(new LTCUnit_DataOut(config))
+      val valid_out = Output(Bool())
   })
+
+  // component instantiation
+  println("instatiate ltc_units")
+  val ltc_units = (0 until config.N_Units).map{ i => Module(new LTCUnit(config, unitID=i))}.toList
+
+  // TODO: should be removed in the end! Why is this still necessarry?
+  // default assigment to remove errors during development 
+  io <> DontCare
+  for (u <- ltc_units) { u.io <> DontCare }
+
+  // config write
+  val N_Neurons       = RegEnable(io.memWrite.N_Neurons_write.bits, 0.U, io.memWrite.N_Neurons_write.valid)
+  val Max_out_Neurons = RegEnable(io.memWrite.Max_out_Neurons_write.bits, 0.U, io.memWrite.Max_out_Neurons_write.valid)
+  val Max_synapses    = RegEnable(io.memWrite.Max_synapses_write.bits, 0.U, io.memWrite.Max_synapses_write.valid) // TODO: is this necessary??
+
+
+  // state memory
+  val state_mem = SyncReadMem(config.maxNeurons, FixedPoint(config.w.W, config.f.BP))
+  when(io.memWrite.stateWrite.fire) {
+    state_mem(io.memWrite.stateWrite.bits.stateAddr) := io.memWrite.stateWrite.bits.stateValue.asFixedPoint(config.f.BP)
+  }
+
+  // ltc unit memory write interface 
+  for (i <- 0 until config.N_Units) { 
+    ltc_units(i).io.memWrite <> io.memWrite.UnitMemWrite 
+    when (io.memWrite.UnitAddr === i.U(config.UnitAddrWidth.W)) {
+      ltc_units(i).io.memWrite.valids.zip(io.memWrite.UnitMemWrite.valids).foreach{ case (a, b) => a := b }
+    }.otherwise {
+      ltc_units(i).io.memWrite.valids.foreach(_ := false.B)
+    }
+  }
+
+  // Counter logic
+  val input_neuron_counter = RegInit(0.U(config.neuronCounterWidth.W))
+  when ((input_neuron_counter === (N_Neurons-1.U)) || io.fire) { 
+    input_neuron_counter := 0.U
+  }.elsewhen (io.en) {
+    input_neuron_counter := input_neuron_counter + 1.U
+  }
+  
+  val out_neuron_counter = RegInit(0.U(config.neuronCounterWidth.W))
+  when (io.fire) { // NOTE: assumes will never overflow (as it never should, otherwise config is bad)
+    out_neuron_counter := 0.U
+  }.elsewhen ((input_neuron_counter === (N_Neurons-1.U)) && io.en) {
+    out_neuron_counter := out_neuron_counter + 1.U
+  }
+
+  val synapse_counter = RegInit(0.U(config.synapseCounterWidth.W))
+  when (io.fire) { // NOTE: assumes will never overflow (as it never should, otherwise config is bad)
+    synapse_counter := 0.U
+  }.elsewhen (io.en) {
+    synapse_counter := synapse_counter + 1.U
+  }
+
+  // Unit Inputs
+  val current_state = state_mem(input_neuron_counter)
+  val fire_z1 = RegNext(io.fire)
+
+  ltc_units.foreach{u => 
+    u.io.en := io.en // TODO: does this need to be delayed too?  
+    u.io.fire := fire_z1
+    u.io.j := out_neuron_counter
+    u.io.k := synapse_counter
+    u.io.x_z1 := current_state
+    u.io.last_state := (input_neuron_counter === (N_Neurons-1.U)) // TODO: does this need to be delayed too?  
+  }
+
+  // Unit outputs
+  io.busy := ltc_units.collect(_.io.busy).reduce(_||_)
+  val units_done = ltc_units.collect(_.io.done).reduce(_&&_)
+
+  val queuesEmpty = (0 until config.N_Units).map{ i => Wire(Bool())}.toList
+  val result_write_arbitrer = Module(new RRArbiter(chiselTypeOf(ltc_units(0).io.unit_out.bits), config.N_Units))
+  result_write_arbitrer.io <> DontCare // TODO: why is this necessary????? 😠
+  for (i <- 0 until config.N_Units) {
+    val enq : ReadyValidIO[LTCUnit_DataOut] = ltc_units(i).io.unit_out
+    val q = Module(new Queue(chiselTypeOf(enq.bits), config.ltc_out_queue_size))
+    q.io.enq.valid := enq.valid // copy from Queue implementation
+    q.io.enq.bits := enq.bits
+    enq.ready := q.io.enq.ready
+    result_write_arbitrer.io.in(i) <> q.io.deq
+    queuesEmpty(i) := (q.io.count === 0.U) // FYI: this is why the short Queue syntax is not used
+  }
+
+  io.done := units_done && queuesEmpty.reduce(_ && _) // TODO: maybe should incorperate other things here!
+
+  result_write_arbitrer.io.out.ready := true.B
+  io.valid_out  := false.B
+  when(result_write_arbitrer.io.out.fire) {
+    io.chosen_out := result_write_arbitrer.io.chosen
+    io.data_out   := result_write_arbitrer.io.out.bits
+    io.valid_out  := true.B
+  }
+
 }
 
-class LTCUnit(  val config  : LTCCoprocConfig = new LTCCoprocConfig()
+class LTCUnit(  val config  : LTCCoprocConfig, val unitID : Int = -1
               ) extends Module {
 
   val io = IO(new Bundle {
@@ -200,16 +337,16 @@ class LTCUnit(  val config  : LTCCoprocConfig = new LTCCoprocConfig()
 
       val busy    = Output(Bool())
       val done    = Output(Bool())
-      val act     = Output(FixedPoint(config.w.W, config.f.BP))
-      val rev_act = Output(FixedPoint(config.w.W, config.f.BP))
 
-      val valid   = Output(Bool())
+      val unit_out = Decoupled(new LTCUnit_DataOut(config))
 
       val memWrite = new LTCUnit_MemoryWriteIF(config.w, config.synapseCounterWidth, config.ramBlockArrdWidth, config.neuronCounterWidth)
+
+      val csr = new LTCUnit_CSR(config)
   })
 
   // component instantiation
-  val sigmoid = Module(new HardSigmoid(config)) // TODO add sigmoid lut_addr_w --> maybe define LTC Proc config in general somewhere, like rocket config
+  val sigmoid = Module(new HardSigmoid(config))
 
   // constants
   val MULT_LATENCY = if (config.w > 17) {4} else {1}
@@ -298,8 +435,8 @@ class LTCUnit(  val config  : LTCCoprocConfig = new LTCCoprocConfig()
   val E_rev = weight_mems(LTCUnit_WeightSel.erev)(Erev_addr)
 
   // activation accumulators
-  val act_accu = Reg(chiselTypeOf(io.act))
-  val rev_act_accu = Reg(chiselTypeOf(io.rev_act))
+  val act_accu = Reg(chiselTypeOf(io.unit_out.bits.act))
+  val rev_act_accu = Reg(chiselTypeOf(io.unit_out.bits.rev_act))
 
   val s_times_w_times_E_rev = Wire(FixedPoint(config.w.W, config.f.BP))
   s_times_w_times_E_rev := (s_times_w * E_rev)
@@ -315,16 +452,28 @@ class LTCUnit(  val config  : LTCCoprocConfig = new LTCCoprocConfig()
     rev_act_accu := rev_act_accu + s_times_w_times_E_rev_reg
   }
 
-  // output
-  io.valid := accu_rst_shrg
-  when(accu_rst_shrg) {
-    io.act     := act_accu
-    io.rev_act := rev_act_accu
-  }
-
-  io.done := done_shrg && accu_done
+  val done_out = RegInit(false.B)
+  // when (done_shrg && accu_done) { done_out := true.B } // maybe accu_rst_shrg is better than accu_done
+  when (done_shrg && (accu_rst_shrg || accu_done)) { done_out := true.B } // maybe accu_rst_shrg is better than accu_done
+  .elsewhen(io.fire) { done_out := false.B }
+  io.done := done_out
   io.busy := busy
 
+  // output
+  io.unit_out.valid := accu_rst_shrg && !done_out
+  when(accu_rst_shrg) {
+    io.unit_out.bits.act     := act_accu
+    io.unit_out.bits.rev_act := rev_act_accu
+  }
+
+  if (config.DEBUG) {
+    val out_missed_count = RegInit(0.U(config.xLen.W))
+    when(io.unit_out.valid && !io.unit_out.ready) {
+      out_missed_count := out_missed_count + 1.U
+      printf("LTC Unit output was missed!!!! \n")
+    }
+    io.csr.unit_out_missed_count := out_missed_count
+  }
 }
 
 class HardSigmoid(val config : LTCCoprocConfig) extends Module {
