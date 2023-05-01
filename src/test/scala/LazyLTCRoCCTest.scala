@@ -156,7 +156,7 @@ class LTCUnit_Latency_test extends AnyFlatSpec with ChiselScalatestTester {
     it should s"check the latency of the LTC Unit with w=$w" in {
       test(new LTCUnit(new LTCCoprocConfig(w=w, f=w/2))).withAnnotations(Seq(PrintFullStackTraceAnnotation)) { c =>
         val exp_mult_latency = if (w > 17) {4} else {1}
-        val exp_latency = 2 + 8 + 2*exp_mult_latency + (exp_mult_latency-1)
+        val exp_latency = 1 + 8 + 2*exp_mult_latency + (exp_mult_latency-1)
         assert(c.LATENCY == exp_latency)
       }
     }
@@ -168,7 +168,7 @@ class LTCUnit_Datapath_test extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "LTCUnit"
   // test class body here
   it should "activate done according N_out_neurons " in {
-    val N_out_neurons_test = 14
+    val N_out_neurons_test = 12
     test(new LTCUnit(new LTCCoprocConfig())).withAnnotations(Seq(WriteVcdAnnotation)) { c =>
       c.clock.step() // step reset
       c.io.en.poke(false.B) // disable LTC Unit
@@ -191,11 +191,11 @@ class LTCUnit_Datapath_test extends AnyFlatSpec with ChiselScalatestTester {
       for (j <- 0 until N_out_neurons_test)
       {
         c.io.done.expect(false.B, s"done is set before j reaches max $N_out_neurons_test - j is only at $j")
-        c.clock.step()
         c.io.j.poke(j.U)
+        c.clock.step(5)
       }
       c.io.last_state.poke(true)
-      // check done is low until 9+2 steps later
+      // check done is low until LATENCY steps later
       for (i <- 0 until c.LATENCY)
       { 
         c.io.done.expect(false.B, s"done is set before latency is over - only waited $i cc")
@@ -290,15 +290,15 @@ class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
         }
       }
       
-      for (_ <- 0 until (c.LATENCY - 1))
+      for (_ <- 0 until (c.LATENCY - 1 ))
       {
         c.io.done.expect(false)
         c.clock.step()
         c.io.busy.expect(true)
       }
       
-      c.io.done.expect(true)
       c.clock.step()
+      c.io.done.expect(true)
       c.io.busy.expect(false)
       c.clock.step(200)
       c.io.busy.expect(false)

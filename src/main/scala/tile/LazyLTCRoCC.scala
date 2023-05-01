@@ -350,9 +350,8 @@ class LTCUnit(  val config  : LTCCoprocConfig, val unitID : Int = -1
 
   // constants
   val MULT_LATENCY = if (config.w > 17) {4} else {1}
-  // val MULT_LATENCY = 1
   println(s"Mult lantency is: $MULT_LATENCY")
-  val LATENCY = sigmoid.LATENCY + 8 + 2*MULT_LATENCY + (MULT_LATENCY-1) // Latency input to output
+  val LATENCY = sigmoid.LATENCY + 7 + 2*MULT_LATENCY + (MULT_LATENCY-1) // Latency input to output
   val THROUGHPUT = 1 // 1 synapse per cc
 
   // TODO: should be removed in the end! Why is this still necessarry?
@@ -386,13 +385,11 @@ class LTCUnit(  val config  : LTCCoprocConfig, val unitID : Int = -1
   // event signals
   val last_neuron = Wire(Bool())
   last_neuron := (io.j >= (N_out_neurons-1.U))
-  // val done_shrg = ShiftRegister(last_neuron, LATENCY+1, io.en)  // 1 cc additional latency b.c. need to wait until last neurons is actually done
-  val done_shrg = ShiftRegister(last_neuron, LATENCY, io.en)  // 1 cc additional latency b.c. need to wait until last neurons is actually done
+  val done_shrg = ShiftRegister(last_neuron, LATENCY+1, io.en)  // 1 cc additional latency b.c. need to wait until last neurons is actually done
 
-  val fire_accu_rst = ShiftRegister(io.fire, LATENCY-1-2)
+  val fire_accu_rst = ShiftRegister(io.fire, LATENCY-2)
   
-  // val accu_rst_shrg = ShiftRegister(io.last_state, LATENCY-1, io.en)
-  val accu_rst_shrg = ShiftRegister(io.last_state, LATENCY-1-1, io.en)
+  val accu_rst_shrg = ShiftRegister(io.last_state, LATENCY-1, io.en)
   val accu_done = RegNext(accu_rst_shrg)
   
   val busy = RegInit(false.B)
