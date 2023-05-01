@@ -315,18 +315,34 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
   val verilog_config = new LTCCoprocConfig(w=32, f=16)
   (new chisel3.stage.ChiselStage).emitVerilog(new LTCUnit(verilog_config))
 
-  for (W <- Seq(16,32))
+  var dummy_counter_state = false
+
+  // (16,true),(32,true),(16,false),(32,false)
+  val a = Array(16, 32)
+  val b = Array(true, false)
+  for ((x,y) <- a.flatMap(x => b.map(y => (x,y))))
   {
+    val W = x
+    val useFC = y
     val F = W / 2
     val config = new LTCCoprocConfig(w=W, f=F)
 
+    var header_file = "testdata/sandbox_ltc.h"
+    var json_file = s"testdata/sandbox_fix${F}_rocc.json"
+    var fc_str = ""
+    if (useFC) {
+      header_file = "testdata/sandbox_ltc_fc.h"
+      json_file = s"testdata/sandbox_fc_fix${F}_rocc.json"
+      fc_str = "fc "
+    }
+
     // load model definition and weights
-    val (units, ode_synapses, weigth_map, sparcity_matrix) = LTCTestDataUtil.ReadLTCModelFromHeader("testdata/sandbox_ltc.h", F)
+    val (units, ode_synapses, weigth_map, sparcity_matrix) = LTCTestDataUtil.ReadLTCModelFromHeader(header_file, F)
 
     // load rocc input and output values from json
-    val ltc_rocc_values = LTCTestDataUtil.LoadLTCRoCCStimuli(s"testdata/sandbox_fix${F}_rocc.json")
+    val ltc_rocc_values = LTCTestDataUtil.LoadLTCRoCCStimuli(json_file)
     
-    it should s"run sandbox model with fix$F" in {
+    it should s"run sandbox ${fc_str}model with fix$F" in {
       test(new LTCUnit(config)).withAnnotations(Seq(
         WriteVcdAnnotation,
         PrintFullStackTraceAnnotation)) { c =>
@@ -336,8 +352,9 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
         c.io.k.poke(0.U)
         c.clock.step()
 
-        LTCTestUtil.WriteModelData2Unit(c.io.memWrite, c.clock, config,
-          units, 0, 0, weigth_map, sparcity_matrix)
+        val written_synapses = LTCTestUtil.WriteModelData2Unit(c.io.memWrite, c.clock, config,
+          units, units, weigth_map, sparcity_matrix)
+        assert(written_synapses == ode_synapses, "Not all synapses written")
 
         for (test_run <- 0 until ltc_rocc_values.size)
         {
@@ -348,6 +365,8 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
 
           // activate unit and feed some states
           c.io.en.poke(true)
+          // c.clock.step(scala.util.Random.between(1,20))
+          c.clock.step(5)
           fork{ timescope{
             c.io.fire.poke(true)
             c.clock.step()
@@ -363,7 +382,11 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
               {
                 c.io.k.poke(k)
                 if (i > 0) {
-                  c.io.x_z1.poke(FixedPoint(states(i-1), W.W, F.BP))
+                  if (dummy_counter_state) {
+                    c.io.x_z1.poke(FixedPoint((i), W.W, F.BP))
+                  } else {
+                    c.io.x_z1.poke(FixedPoint(states(i-1), W.W, F.BP))
+                  }
                 }
 
                 fork {timescope{
@@ -376,7 +399,11 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
                 c.io.busy.expect(true)
                 k += 1
               }
-              c.io.x_z1.poke(FixedPoint(states(units-1), W.W, F.BP))
+              if (dummy_counter_state) {
+                c.io.x_z1.poke(FixedPoint((units), W.W, F.BP))
+              } else {
+                c.io.x_z1.poke(FixedPoint(states(units-1), W.W, F.BP))
+              }
             }
             c.clock.step()
           } 
@@ -393,11 +420,12 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
             c.clock.step()
           }
           
+          c.clock.step()
           c.io.done.expect(true)
           c.clock.step()
-          c.clock.step()
           c.io.busy.expect(false)
-          c.clock.step(scala.util.Random.between(10,200))
+          // c.clock.step(scala.util.Random.between(10,200))
+          c.clock.step(50)
           c.io.busy.expect(false)
         }
       }
@@ -433,14 +461,14 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
       println("starting test...")
       c.clock.step(10)
 
-      // write minimal config
+      // write Model config
       timescope {
-        c.io.memWrite.Max_out_Neurons_write.bits.poke(units) // TODO: should be ceil(units / N_LTC_units)
+        c.io.memWrite.Max_out_Neurons_write.bits.poke(scala.math.ceil(units.toDouble / config.N_Units).toInt) 
         c.io.memWrite.Max_out_Neurons_write.valid.poke(true)
         c.clock.step()
       }
       timescope {
-        c.io.memWrite.Max_synapses_write.bits.poke(pow(units,2).toInt)
+        c.io.memWrite.Max_synapses_write.bits.poke((pow(units,2) / config.N_Units).toInt)
         c.io.memWrite.Max_synapses_write.valid.poke(true)
         c.clock.step()
       }
@@ -450,9 +478,10 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
         c.clock.step()
       }
 
+
       var written_synapses = 0
       var written_neurons = 0
-      var neurons_per_unit = blinag.DenseVector(Array.fill(config.N_Units)(units / config.N_Units))
+      val neurons_per_unit = blinag.DenseVector(Array.fill(config.N_Units)(units / config.N_Units))
       while (blinag.sum(neurons_per_unit) < units) {
         // find argmin of neurons_per_unit
         val i = blinag.argmin(neurons_per_unit)
@@ -463,15 +492,16 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
       println(neurons_per_unit)
       for (i <- 0 until config.N_Units) {
         c.io.memWrite.UnitAddr.poke(i)
-        // TODO: consider total number of neurons also for in dimension!!!
-        // written_synapses += LTCTestUtil.WriteModelData2Unit(c.io.memWrite.UnitMemWrite, c.clock, config, 
-        //   neurons_per_unit(i), written_synapses, written_neurons, weigth_map, sparcity_matrix)
         written_synapses += LTCTestUtil.WriteModelData2Unit(c.io.memWrite.UnitMemWrite, c.clock, config, 
-          units, 0, 0, weigth_map, sparcity_matrix)
+          units, neurons_per_unit(i), 
+          weigth_map.view.mapValues(l => l.slice(written_synapses, l.length)).toMap,
+          sparcity_matrix.map(_.slice(written_neurons, written_neurons+neurons_per_unit(i))))
         written_neurons += neurons_per_unit(i)
         c.clock.step()
         println(s"now written $written_synapses synapses")
       }
+      assert(written_synapses == ode_synapses, "Not all synapses written")
+      assert(written_neurons  == units, "Not all neurons written")
 
       println(s"written $written_synapses synapses")
       println(s"written $written_neurons neurons")
@@ -483,9 +513,12 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
         c.clock.step()
       }}
 
+
+
       while (!c.io.done.peekBoolean()) {
         c.clock.step()
       }
+      println("LTC Core done")
 
       c.clock.step(500)
     }

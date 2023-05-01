@@ -82,29 +82,29 @@ object LTCTestUtil {
     * @param sparcity_matrix model sparcity matrix
     */
   def WriteModelData2Unit(mem_if : LTCUnit_MemoryWriteIF, clock : Clock, config : LTCCoprocConfig,
-  units : Int, synapses_offset : Int, units_offset : Int, weigth_map : Map[LTCUnit_WeightSel.Type, List[Int]], sparcity_matrix : Array[List[Int]]) : Int = {
+  N_in_neurons : Int, N_out_neurons : Int, weigth_map : Map[LTCUnit_WeightSel.Type, List[Int]], sparcity_matrix : Array[List[Int]]) : Int = {
 
         // write N out neurons
-        mem_if.N_out_neurons_write.bits.poke(units)
+        mem_if.N_out_neurons_write.bits.poke(N_out_neurons)
         mem_if.N_out_neurons_write.valid.poke(true)
         clock.step()
         mem_if.N_out_neurons_write.valid.poke(false)
         clock.step()
 
-        val out_neurons_fanint = Array.fill(units)(0)
+        val out_neurons_fanint = Array.fill(N_out_neurons)(0)
         var total_active_synapses = 0
         // write sparcity
         println("writing someting to sparcity")
         mem_if.sparcity_write.valid.poke(true.B)
-        for (i <- 0 until units)
+        for (j <- 0 until N_out_neurons)
         {
-          for (j <- 0 until units)
+          for (i <- 0 until N_in_neurons)
           {
-            val addr = i*units + j
+            val addr = j*N_in_neurons + i
             mem_if.sparcity_write.bits.writeAddr.poke(addr)
-            mem_if.sparcity_write.bits.writeData.poke(sparcity_matrix(j)(i+units_offset)) // NOTE: mat is transposed here!!!!!!!!!
-            out_neurons_fanint(j) += sparcity_matrix(j)(i+units_offset)
-            total_active_synapses += sparcity_matrix(j)(i+units_offset)
+            mem_if.sparcity_write.bits.writeData.poke(sparcity_matrix(i)(j)) // NOTE: mat is transposed here!!!!!!!!!
+            out_neurons_fanint(j) += sparcity_matrix(i)(j)
+            total_active_synapses += sparcity_matrix(i)(j)
             clock.step()
           }
         }
@@ -122,7 +122,7 @@ object LTCTestUtil {
           for (i <- 0 until total_active_synapses)
           {
             mem_if.weight_write.bits.writeAddr.poke(i)
-            mem_if.weight_write.bits.writeData.poke(weigth_map(m)(i+synapses_offset).asSInt(config.w.W)) 
+            mem_if.weight_write.bits.writeData.poke(weigth_map(m)(i).asSInt(config.w.W)) 
             clock.step()
           }
         }

@@ -140,7 +140,7 @@ class LTCCoprocConfig(
   val ramBlockArrdWidth : Int = 9,
   val hwMultWidth : Int = 18,
   val sigmoid_lut_addr_w : Int = 6, 
-  val N_Units : Int = 4,
+  val N_Units : Int = 5,
   val ltc_out_queue_size : Int = 10,
   // from core parameters
   val xLen : Int = 32,
@@ -386,30 +386,31 @@ class LTCUnit(  val config  : LTCCoprocConfig, val unitID : Int = -1
   // event signals
   val last_neuron = Wire(Bool())
   last_neuron := (io.j >= (N_out_neurons-1.U))
-  val done_shrg = ShiftRegister(last_neuron, LATENCY, io.en) 
+  // val done_shrg = ShiftRegister(last_neuron, LATENCY+1, io.en)  // 1 cc additional latency b.c. need to wait until last neurons is actually done
+  val done_shrg = ShiftRegister(last_neuron, LATENCY, io.en)  // 1 cc additional latency b.c. need to wait until last neurons is actually done
+
+  val fire_accu_rst = ShiftRegister(io.fire, LATENCY-1-2)
   
-  val accu_rst_shrg = ShiftRegister(io.last_state, LATENCY-1, io.en)
+  // val accu_rst_shrg = ShiftRegister(io.last_state, LATENCY-1, io.en)
+  val accu_rst_shrg = ShiftRegister(io.last_state, LATENCY-1-1, io.en)
   val accu_done = RegNext(accu_rst_shrg)
-  
-  val active_synaps_cnt_rst = RegEnable(io.fire, io.en)
   
   val busy = RegInit(false.B)
   when(io.fire) { busy := true.B }.elsewhen(done_shrg && accu_done) { busy := false.B }
 
   // control
   val current_synapse_active = Wire(Bool())
-  current_synapse_active := sparcity_mem(io.k)
-  val current_synapse_active_shrg = ShiftRegister(current_synapse_active, 5+MULT_LATENCY+sigmoid.LATENCY, io.en)
+  current_synapse_active := sparcity_mem(io.k) 
+  val current_synapse_active_shrg = ShiftRegister(current_synapse_active, 5+MULT_LATENCY+sigmoid.LATENCY -1, io.en)
 
   val active_synaps_counter_next = RegInit(0.U(config.synapseCounterWidth.W))
-  when (active_synaps_cnt_rst) {
+  val active_synaps_counter = active_synaps_counter_next
+  when (io.fire) {
     active_synaps_counter_next := 0.U
   }.elsewhen (current_synapse_active && io.en) {
     // inc counter, assuming overflow is impossible
     active_synaps_counter_next := active_synaps_counter_next + 1.U
   }
-  // this ensures that the 1st enable yields zero
-  val active_synaps_counter = RegEnable(active_synaps_counter_next, 0.U, current_synapse_active && io.en)
 
   // weigth address propagaion
   val mu_addr    = RegNext(active_synaps_counter)
@@ -418,7 +419,7 @@ class LTCUnit(  val config  : LTCCoprocConfig, val unitID : Int = -1
   val Erev_addr  = ShiftRegister(w_addr, 1+(MULT_LATENCY-1))
 
   // datapath
-  val x_in_shrg = ShiftRegister(io.x_z1, 3)
+  val x_in_shrg = ShiftRegister(io.x_z1, 2)
   val mu = weight_mems(LTCUnit_WeightSel.mu)(mu_addr)
   val x_minus_mu = RegNext(x_in_shrg - mu)
   val gamma = weight_mems(LTCUnit_WeightSel.gamma)(gamma_addr)
@@ -444,7 +445,7 @@ class LTCUnit(  val config  : LTCCoprocConfig, val unitID : Int = -1
   val s_times_w_reg = ShiftRegister(s_times_w, MULT_LATENCY-1)  
   val s_times_w_times_E_rev_reg = ShiftRegister(s_times_w_times_E_rev, MULT_LATENCY-1)
 
-  when(accu_rst_shrg) {
+  when(accu_rst_shrg || fire_accu_rst) {
     act_accu     := s_times_w_reg
     rev_act_accu := s_times_w_times_E_rev_reg
   }.otherwise {
@@ -453,8 +454,8 @@ class LTCUnit(  val config  : LTCCoprocConfig, val unitID : Int = -1
   }
 
   val done_out = RegInit(false.B)
-  // when (done_shrg && accu_done) { done_out := true.B } // maybe accu_rst_shrg is better than accu_done
-  when (done_shrg && (accu_rst_shrg || accu_done)) { done_out := true.B } // maybe accu_rst_shrg is better than accu_done
+  when (done_shrg && accu_done) { done_out := true.B } // maybe accu_rst_shrg is better than accu_done
+  // when (done_shrg && (accu_rst_shrg || accu_done)) { done_out := true.B } // maybe accu_rst_shrg is better than accu_done
   .elsewhen(io.fire) { done_out := false.B }
   io.done := done_out
   io.busy := busy
