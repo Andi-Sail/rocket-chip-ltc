@@ -151,7 +151,7 @@ class LTCCoprocConfig(
   val maxSynapses = pow(maxNeurons, 2).toInt
   val synapseCounterWidth = log2Ceil(maxSynapses)
 
-  val UnitAddrWidth = log2Ceil(N_Units)
+  val UnitAddrWidth = max(1, log2Ceil(N_Units)) // requires at least one bit
 }
 
 // --- Bundels and Enums ---
@@ -259,23 +259,25 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
     }
   }
 
+  val units_done = Wire(Bool())
+
   // Counter logic
   val input_neuron_counter = RegInit(0.U(config.neuronCounterWidth.W))
-  when ((input_neuron_counter === (N_Neurons-1.U)) || io.fire) { 
+  when ((input_neuron_counter === (N_Neurons-1.U)) || io.fire || units_done) { 
     input_neuron_counter := 0.U
   }.elsewhen (io.en) {
     input_neuron_counter := input_neuron_counter + 1.U
   }
   
   val out_neuron_counter = RegInit(0.U(config.neuronCounterWidth.W))
-  when (io.fire) { // NOTE: assumes will never overflow (as it never should, otherwise config is bad)
+  when (io.fire || units_done) { // NOTE: assumes will never overflow (as it never should, otherwise config is bad)
     out_neuron_counter := 0.U
   }.elsewhen ((input_neuron_counter === (N_Neurons-1.U)) && io.en) {
     out_neuron_counter := out_neuron_counter + 1.U
   }
 
   val synapse_counter = RegInit(0.U(config.synapseCounterWidth.W))
-  when (io.fire) { // NOTE: assumes will never overflow (as it never should, otherwise config is bad)
+  when (io.fire || units_done) { // NOTE: assumes will never overflow (as it never should, otherwise config is bad)
     synapse_counter := 0.U
   }.elsewhen (io.en) {
     synapse_counter := synapse_counter + 1.U
@@ -286,8 +288,9 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
   val fire_z1 = RegNext(io.fire)
 
   ltc_units.foreach{u => 
-    u.io.en := io.en // TODO: does this need to be delayed too?  
+    u.io.en := io.en 
     u.io.fire := fire_z1
+    
     u.io.j := out_neuron_counter
     u.io.k := synapse_counter
     u.io.x_z1 := current_state
@@ -296,7 +299,7 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
 
   // Unit outputs
   io.busy := ltc_units.collect(_.io.busy).reduce(_||_)
-  val units_done = ltc_units.collect(_.io.done).reduce(_&&_)
+  units_done := ltc_units.collect(_.io.done).reduce(_&&_)
 
   val queuesEmpty = (0 until config.N_Units).map{ i => Wire(Bool())}.toList
   val result_write_arbitrer = Module(new RRArbiter(chiselTypeOf(ltc_units(0).io.unit_out.bits), config.N_Units))
@@ -454,7 +457,7 @@ class LTCUnit(  val config  : LTCCoprocConfig, val unitID : Int = -1
   when (done_shrg && accu_done) { done_out := true.B } // maybe accu_rst_shrg is better than accu_done
   // when (done_shrg && (accu_rst_shrg || accu_done)) { done_out := true.B } // maybe accu_rst_shrg is better than accu_done
   .elsewhen(io.fire) { done_out := false.B }
-  io.done := done_out
+  io.done := done_out && !io.fire // use !io.fire to make sure output goes to low immediately on fire
   io.busy := busy
 
   // output

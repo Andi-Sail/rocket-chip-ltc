@@ -9,6 +9,8 @@ import scala.math._
 // JSON reader
 import io.circe._
 import io.circe.parser._
+import chisel3.util.Valid
+import freechips.rocketchip.tile.LTCCore_StateWrite
 
 /**
   * Utility functions to read test data
@@ -76,8 +78,8 @@ object LTCTestUtil {
     * @param mem_if memory interface of LTC Unit
     * @param clock clock of LTC Unit
     * @param config coprocessor config
-    * @param units model param
-    * @param ode_synapses model param
+    * @param N_in_neurons model param - number of input neurons for this unit (usually total number of units)
+    * @param N_out_neurons number of output neurons for this unit (must be <= N_in_neurons)
     * @param weigth_map model weights
     * @param sparcity_matrix model sparcity matrix
     */
@@ -130,4 +132,16 @@ object LTCTestUtil {
 
         return total_active_synapses
   } 
+
+  def WriteStates2Core(mem_if : Valid[LTCCore_StateWrite],  clock : Clock, config : LTCCoprocConfig,
+                       states : Array[Int]) = {
+    
+    mem_if.valid.poke(true)
+    for (i <- 0 until states.length) {
+      mem_if.bits.stateAddr.poke(i)
+      mem_if.bits.stateValue.poke(states(i))
+      clock.step()
+    }
+    mem_if.valid.poke(false)
+  }
 }

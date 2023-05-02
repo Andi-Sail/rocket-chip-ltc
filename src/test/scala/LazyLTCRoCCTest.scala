@@ -317,13 +317,11 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
 
   var dummy_counter_state = false
 
-  // (16,true),(32,true),(16,false),(32,false)
-  val a = Array(16, 32)
-  val b = Array(true, false)
-  for ((x,y) <- a.flatMap(x => b.map(y => (x,y))))
+  for {
+    W <- Array(16,32)
+    useFC <- Array(true, false)
+  }
   {
-    val W = x
-    val useFC = y
     val F = W / 2
     val config = new LTCCoprocConfig(w=W, f=F)
 
@@ -440,87 +438,132 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
   val verilog_config = new LTCCoprocConfig(w=32, f=16)
   (new chisel3.stage.ChiselStage).emitVerilog(new LTCCore(verilog_config))
 
-  val config = new LTCCoprocConfig()
-
   println("preping test...")
 
-  // TODO: extend for different number formats
-  val F = config.f
-  val W = config.w
-  // load model definition and weights
-  val (units, ode_synapses, weigth_map, sparcity_matrix) = LTCTestDataUtil.ReadLTCModelFromHeader("testdata/sandbox_ltc.h", F)
+  for {
+    W <- Array(16,32)
+    useFC <- Array(true, false)
+    n_units <- Array(1,4,5)
+    // W <- Array(16)
+    // useFC <- Array(true)
+    // n_units <- Array(1)
+  }
+  {
+    val F = W / 2
+    val config = new LTCCoprocConfig(w=W, f=F, N_Units=n_units)
 
-  // load rocc input and output values from json
-  val ltc_rocc_values = LTCTestDataUtil.LoadLTCRoCCStimuli(s"testdata/sandbox_fix${F}_rocc.json")
-  
+    var header_file = "testdata/sandbox_ltc.h"
+    var json_file = s"testdata/sandbox_fix${F}_rocc.json"
+    var fc_str = "ncp"
+    if (useFC) {
+      header_file = "testdata/sandbox_ltc_fc.h"
+      json_file = s"testdata/sandbox_fc_fix${F}_rocc.json"
+      fc_str = "fc"
+    }
 
-  it should s"run ltc core first tries" in {
-    test(new LTCCore(config)).withAnnotations(Seq(
-    WriteVcdAnnotation,
-    PrintFullStackTraceAnnotation)) { c =>
-      println("starting test...")
-      c.clock.step(10)
 
-      // write Model config
-      timescope {
-        c.io.memWrite.Max_out_Neurons_write.bits.poke(scala.math.ceil(units.toDouble / config.N_Units).toInt) 
-        c.io.memWrite.Max_out_Neurons_write.valid.poke(true)
-        c.clock.step()
+    // load model definition and weights
+    val (units, ode_synapses, weigth_map, sparcity_matrix) = LTCTestDataUtil.ReadLTCModelFromHeader(header_file, F)
+
+    // load rocc input and output values from json
+    val ltc_rocc_values = LTCTestDataUtil.LoadLTCRoCCStimuli(json_file)
+    
+
+    it should s"run ltc core with $fc_str sandbox in fix${F} with $n_units units" in {
+      test(new LTCCore(config)).withAnnotations(Seq(
+      WriteVcdAnnotation,
+      PrintFullStackTraceAnnotation)) { c =>
+        println("starting test...")
+        c.clock.step(10)
+
+        // write Model config
+        timescope {
+          c.io.memWrite.Max_out_Neurons_write.bits.poke(scala.math.ceil(units.toDouble / config.N_Units).toInt) 
+          c.io.memWrite.Max_out_Neurons_write.valid.poke(true)
+          c.clock.step()
+        }
+        timescope {
+          c.io.memWrite.Max_synapses_write.bits.poke((pow(units,2) / config.N_Units).toInt)
+          c.io.memWrite.Max_synapses_write.valid.poke(true)
+          c.clock.step()
+        }
+        timescope {
+          c.io.memWrite.N_Neurons_write.bits.poke(units)
+          c.io.memWrite.N_Neurons_write.valid.poke(true)
+          c.clock.step()
+        }
+
+        var written_synapses = 0
+        var written_neurons = 0
+        val neurons_per_unit = blinag.DenseVector(Array.fill(config.N_Units)(units / config.N_Units))
+        while (blinag.sum(neurons_per_unit) < units) {
+          // find argmin of neurons_per_unit
+          val i = blinag.argmin(neurons_per_unit)
+          // add one
+          neurons_per_unit(i) += 1
+        }
+        println("Using the following partitioning for the units")
+        println(neurons_per_unit)
+        for (i <- 0 until config.N_Units) {
+          c.io.memWrite.UnitAddr.poke(i)
+          written_synapses += LTCTestUtil.WriteModelData2Unit(c.io.memWrite.UnitMemWrite, c.clock, config, 
+            units, neurons_per_unit(i), 
+            weigth_map.view.mapValues(l => l.slice(written_synapses, l.length)).toMap,
+            sparcity_matrix.map(_.slice(written_neurons, written_neurons+neurons_per_unit(i))))
+          written_neurons += neurons_per_unit(i)
+          c.clock.step()
+          println(s"now written $written_synapses synapses")
+        }
+        assert(written_synapses == ode_synapses, "Not all synapses written")
+        assert(written_neurons  == units, "Not all neurons written")
+
+        println(s"written $written_synapses synapses")
+        println(s"written $written_neurons neurons")
+
+        for (test_run <- 0 until 3)//ltc_rocc_values.size)
+        {
+          println(s"fix_$F test - iteration $test_run")
+          val states = ltc_rocc_values(test_run)("states")
+          val rev_activation = ltc_rocc_values(test_run)("rev_activation")
+          val activation = ltc_rocc_values(test_run)("activation")
+
+          // feed states
+          LTCTestUtil.WriteStates2Core(c.io.memWrite.stateWrite, c.clock, config, states)
+
+          // activate core and fire on 💥
+          c.io.en.poke(true)
+          fork{ timescope{
+            c.io.fire.poke(true)
+            c.clock.step()
+          }}
+
+          fork{
+            var outputs_checked = 0
+            val outputs_checked_of_unit = Array.fill(config.N_Units) {0}
+            while (outputs_checked < units) {
+              while (!c.io.valid_out.peekBoolean()) {
+                c.clock.step()
+              }
+              val unit_n = c.io.chosen_out.peekInt().toInt
+              var neuron_n = outputs_checked_of_unit(unit_n)
+              if (unit_n > 0) { neuron_n += blinag.sum(neurons_per_unit.slice(0,unit_n)) }
+              c.io.data_out.act.expect(FixedPoint(activation(neuron_n), W.W, F.BP), s"act missmatch for neuron $neuron_n from unit $unit_n in test run $test_run")
+              c.io.data_out.rev_act.expect(FixedPoint(rev_activation(neuron_n), W.W, F.BP), s"rev act missmatch for neuron $neuron_n from unit $unit_n in test run $test_run")
+              outputs_checked_of_unit(unit_n) +=1
+              outputs_checked += 1
+              c.clock.step()
+            }
+            println("All neurons checked!")
+          }
+
+          while (!c.io.done.peekBoolean()) {
+            c.clock.step()
+          }
+          println("LTC Core done")
+
+          c.clock.step(200) // TODO: check if things break if this is shorter!!!
+        }
       }
-      timescope {
-        c.io.memWrite.Max_synapses_write.bits.poke((pow(units,2) / config.N_Units).toInt)
-        c.io.memWrite.Max_synapses_write.valid.poke(true)
-        c.clock.step()
-      }
-      timescope {
-        c.io.memWrite.N_Neurons_write.bits.poke(units)
-        c.io.memWrite.N_Neurons_write.valid.poke(true)
-        c.clock.step()
-      }
-
-
-      var written_synapses = 0
-      var written_neurons = 0
-      val neurons_per_unit = blinag.DenseVector(Array.fill(config.N_Units)(units / config.N_Units))
-      while (blinag.sum(neurons_per_unit) < units) {
-        // find argmin of neurons_per_unit
-        val i = blinag.argmin(neurons_per_unit)
-        // add one
-        neurons_per_unit(i) += 1
-      }
-      println("Using the following partitioning for the units")
-      println(neurons_per_unit)
-      for (i <- 0 until config.N_Units) {
-        c.io.memWrite.UnitAddr.poke(i)
-        written_synapses += LTCTestUtil.WriteModelData2Unit(c.io.memWrite.UnitMemWrite, c.clock, config, 
-          units, neurons_per_unit(i), 
-          weigth_map.view.mapValues(l => l.slice(written_synapses, l.length)).toMap,
-          sparcity_matrix.map(_.slice(written_neurons, written_neurons+neurons_per_unit(i))))
-        written_neurons += neurons_per_unit(i)
-        c.clock.step()
-        println(s"now written $written_synapses synapses")
-      }
-      assert(written_synapses == ode_synapses, "Not all synapses written")
-      assert(written_neurons  == units, "Not all neurons written")
-
-      println(s"written $written_synapses synapses")
-      println(s"written $written_neurons neurons")
-
-      // activate core and fire on 💥
-      c.io.en.poke(true)
-      fork{ timescope{
-        c.io.fire.poke(true)
-        c.clock.step()
-      }}
-
-
-
-      while (!c.io.done.peekBoolean()) {
-        c.clock.step()
-      }
-      println("LTC Core done")
-
-      c.clock.step(500)
     }
   }
 }
