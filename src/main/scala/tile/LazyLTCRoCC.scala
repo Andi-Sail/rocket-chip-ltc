@@ -201,11 +201,10 @@ class LTCCore_MemoryWriteIF(val config : LTCCoprocConfig) extends Bundle {
   val N_Neurons_write = Flipped(Valid(UInt(config.neuronCounterWidth.W)))
   val Max_out_Neurons_write = Flipped(Valid(UInt(config.neuronCounterWidth.W)))
   val Max_synapses_write = Flipped(Valid(UInt(config.synapseCounterWidth.W)))
-  val result_addr = Flipped(Valid(UInt(config.xLen.W)))
 }
 
 class LTCCore_CSR(val config : LTCCoprocConfig) extends Bundle {
-  val units_csr = (0 until config.N_Units).map { i => new LTCUnit_CSR(config) }.toList
+  // val units_csr = (0 until config.N_Units).map { i => new LTCUnit_CSR(config) }.toList
   // (0 until config.N_Units).map{ i => Module(new LTCUnit(config, unitID=i))}.toList
 }
 
@@ -222,10 +221,12 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
 
       val memWrite = new LTCCore_MemoryWriteIF(config)
 
-      // temp test outputs
       val chosen_out = Output(UInt(32.W))
       val data_out = Output(new LTCUnit_DataOut(config))
       val valid_out = Output(Bool())
+
+      // val csr = new LTCCore_CSR(config)
+
   })
 
   // component instantiation
@@ -258,6 +259,11 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
       ltc_units(i).io.memWrite.valids.foreach(_ := false.B)
     }
   }
+
+  // LTC Unit CSR
+  // for (i <- 0 until config.N_Units) { 
+  //   ltc_units(i).io.csr <> io.csr.units_csr(i)
+  // }
 
   val units_done = Wire(Bool())
 
@@ -314,7 +320,7 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
     queuesEmpty(i) := (q.io.count === 0.U) // FYI: this is why the short Queue syntax is not used
   }
 
-  io.done := units_done && queuesEmpty.reduce(_ && _) // TODO: maybe should incorperate other things here!
+  io.done := units_done && queuesEmpty.reduce(_ && _) && !io.fire 
 
   result_write_arbitrer.io.out.ready := true.B
   io.valid_out  := false.B

@@ -300,7 +300,7 @@ class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
       c.clock.step()
       c.io.done.expect(true)
       c.io.busy.expect(false)
-      c.clock.step(200)
+      c.clock.step(scala.util.Random.between(10,200))
       c.io.busy.expect(false)
     }
   }
@@ -422,8 +422,7 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
           c.io.done.expect(true)
           c.clock.step()
           c.io.busy.expect(false)
-          // c.clock.step(scala.util.Random.between(10,200))
-          c.clock.step(50)
+          c.clock.step(scala.util.Random.between(10,200))
           c.io.busy.expect(false)
         }
       }
@@ -520,7 +519,7 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
         println(s"written $written_synapses synapses")
         println(s"written $written_neurons neurons")
 
-        for (test_run <- 0 until 3)//ltc_rocc_values.size)
+        for (test_run <- 0 until ltc_rocc_values.size)
         {
           println(s"fix_$F test - iteration $test_run")
           val states = ltc_rocc_values(test_run)("states")
@@ -553,15 +552,16 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
               outputs_checked += 1
               c.clock.step()
             }
-            println("All neurons checked!")
+            println(s"All neurons checked for test run $test_run")
           }
-
+          
+          // c.clock.step()
           while (!c.io.done.peekBoolean()) {
             c.clock.step()
           }
           println("LTC Core done")
 
-          c.clock.step(200) // TODO: check if things break if this is shorter!!!
+          c.clock.step(scala.util.Random.between(10,200)) 
         }
       }
     }
