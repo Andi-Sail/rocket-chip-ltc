@@ -96,10 +96,13 @@ class DefaultFPGAConfig extends Config(new WithNSmallCores(1) ++ new BaseFPGACon
 
 class CloneTileConfig extends Config(new WithCloneRocketTiles(7) ++ new WithNBigCores(1) ++ new WithCoherentBusTopology ++ new BaseConfig)
 
-class LTCConfig64 extends Config(new WithNSmallCores(1) ++ new BaseFPGAConfig ++ new WithRoccExample)
-class LTCConfig extends Config(new WithNSmallCores(1) ++ new WithRV32 ++ new BaseFPGAConfig ++ new WithRoccExample)
-class LTCConfigFPU extends Config(new WithNSmallCores32FPU(1) ++ new BaseFPGAConfig ++ new WithRoccExample)
+// class LTCConfig64 extends Config(new WithNSmallCores(1) ++ new BaseFPGAConfig ++ new WithRoccExample)
+// class LTCConfig extends Config(new WithNSmallCores(1) ++ new WithRV32 ++ new BaseFPGAConfig ++ new WithRoccExample)
+// class LTCConfigFPU extends Config(new WithNSmallCores32FPU(1) ++ new BaseFPGAConfig ++ new WithRoccExample)
+
+class LTCConfig extends Config(new WithNSmallCores(1) ++ new WithRV32 ++ new BaseFPGAConfig ++ new WithLTCRocc)
 
 
 class LTCConfigRBB extends Config(new WithJtagDTMSystem ++ new LTCConfig)
-class LTCConfigFPURBB extends Config(new WithJtagDTMSystem ++ new LTCConfigFPU)
+
+// class LTCConfigFPURBB extends Config(new WithJtagDTMSystem ++ new LTCConfigFPU)

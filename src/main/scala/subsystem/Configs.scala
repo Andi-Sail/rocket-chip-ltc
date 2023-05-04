@@ -392,6 +392,20 @@ class WithRoccExample extends Config((site, here, up) => {
     })
 })
 
+class WithLTCRocc  extends Config((site, here, up) => {
+  case BuildRoCC => List(
+    (p: Parameters) => {
+        val ltcCoProc = LazyModule(new LTCCoProcRoCC(OpcodeSet.custom0, new LTCCoprocConfig())(p)) // TODO: do config 
+        ltcCoProc
+    }
+    ,
+    (p: Parameters) => {
+        val my_accumulator = LazyModule(new MyAccumulatorExample(OpcodeSet.custom1)(p))
+        my_accumulator
+    }
+    )
+})
+
 class WithDefaultBtb extends Config((site, here, up) => {
   case TilesLocated(InSubsystem) => up(TilesLocated(InSubsystem), site) map {
     case tp: RocketTileAttachParams => tp.copy(tileParams = tp.tileParams.copy(
