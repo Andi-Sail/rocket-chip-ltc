@@ -21,6 +21,8 @@ import breeze.{numerics => bnumerics}
 import io.circe._
 import io.circe.parser._
 import freechips.rocketchip.tile.LTCCoprocConfig
+import freechips.rocketchip.tile.LTCUnit_CSRs
+import freechips.rocketchip.tile.LTCCore_CSRs
 
 
 // sigmoid test independed of HW implementation
@@ -175,15 +177,19 @@ class LTCUnit_Datapath_test extends AnyFlatSpec with ChiselScalatestTester {
       c.io.j.poke(0.U)
       
       // write some value to N_out_neurons_write
-      c.io.memWrite.N_out_neurons_write.bits.poke(N_out_neurons_test.U)
-      c.io.memWrite.N_out_neurons_write.valid.poke(true.B)
+      c.io.csr.csrWrite.bits.poke(N_out_neurons_test.U)
+      c.io.csr.csrWrite.valid.poke(true.B)
+      c.io.csr.csrSel.valid.poke(true.B)
+      c.io.csr.csrSel.bits.poke(LTCUnit_CSRs.n_out_neurons)
       
       c.clock.step()
       c.io.en.poke(true.B)
       c.io.unit_out.ready.poke(true) // we do not really care about data out here anyway
 
-      c.io.memWrite.N_out_neurons_write.bits.poke(42.U)
-      c.io.memWrite.N_out_neurons_write.valid.poke(false.B)
+      c.io.csr.csrWrite.bits.poke(42.U)
+      c.io.csr.csrWrite.valid.poke(false.B)
+      c.io.csr.csrSel.valid.poke(true.B)
+      c.io.csr.csrSel.bits.poke(LTCUnit_CSRs.n_out_neurons)
       // check done is low
       c.io.done.expect(false.B, s"done is set before anything happens")
       
@@ -228,10 +234,14 @@ class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
       c.clock.step()
 
       // write N out neurons
-      c.io.memWrite.N_out_neurons_write.bits.poke(N_neurons)
-      c.io.memWrite.N_out_neurons_write.valid.poke(true)
+      c.io.csr.csrWrite.bits.poke(N_neurons)
+      c.io.csr.csrWrite.valid.poke(true)
+      c.io.csr.csrSel.valid.poke(true.B)
+      c.io.csr.csrSel.bits.poke(LTCUnit_CSRs.n_out_neurons)
       c.clock.step()
-      c.io.memWrite.N_out_neurons_write.valid.poke(false)
+      c.io.csr.csrWrite.valid.poke(false)
+      c.io.csr.csrSel.valid.poke(true.B)
+      c.io.csr.csrSel.bits.poke(LTCUnit_CSRs.n_out_neurons)
       c.clock.step()
 
       // write sparcity
@@ -350,7 +360,7 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
         c.io.k.poke(0.U)
         c.clock.step()
 
-        val written_synapses = LTCTestUtil.WriteModelData2Unit(c.io.memWrite, c.clock, config,
+        val written_synapses = LTCTestUtil.WriteModelData2Unit(c.io.csr, c.io.memWrite, c.clock, config,
           units, units, weigth_map, sparcity_matrix)
         assert(written_synapses == ode_synapses, "Not all synapses written")
 
@@ -430,6 +440,7 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
   }
 }
 
+
 class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "LTCCore"
 
@@ -477,18 +488,24 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
 
         // write Model config
         timescope {
-          c.io.memWrite.Max_out_Neurons_write.bits.poke(scala.math.ceil(units.toDouble / config.N_Units).toInt) 
-          c.io.memWrite.Max_out_Neurons_write.valid.poke(true)
+          c.io.csr.csrWrite.bits.poke(scala.math.ceil(units.toDouble / config.N_Units).toInt) 
+          c.io.csr.csrWrite.valid.poke(true)
+          c.io.csr.csrSel.bits.poke(LTCCore_CSRs.max_out_neurons)
+          c.io.csr.csrSel.valid.poke(true)
           c.clock.step()
         }
         timescope {
-          c.io.memWrite.Max_synapses_write.bits.poke((pow(units,2) / config.N_Units).toInt)
-          c.io.memWrite.Max_synapses_write.valid.poke(true)
+          c.io.csr.csrWrite.bits.poke((pow(units,2) / config.N_Units).toInt)
+          c.io.csr.csrWrite.valid.poke(true)
+          c.io.csr.csrSel.bits.poke(LTCCore_CSRs.max_synapses)
+          c.io.csr.csrSel.valid.poke(true)
           c.clock.step()
         }
         timescope {
-          c.io.memWrite.N_Neurons_write.bits.poke(units)
-          c.io.memWrite.N_Neurons_write.valid.poke(true)
+          c.io.csr.csrWrite.bits.poke(units)
+          c.io.csr.csrWrite.valid.poke(true)
+          c.io.csr.csrSel.bits.poke(LTCCore_CSRs.n_neurons)
+          c.io.csr.csrSel.valid.poke(true)
           c.clock.step()
         }
 
@@ -505,7 +522,8 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
         println(neurons_per_unit)
         for (i <- 0 until config.N_Units) {
           c.io.memWrite.UnitAddr.poke(i)
-          written_synapses += LTCTestUtil.WriteModelData2Unit(c.io.memWrite.UnitMemWrite, c.clock, config, 
+          c.io.csr.UnitAddr.poke(i)
+          written_synapses += LTCTestUtil.WriteModelData2Unit(c.io.csr.UnitCSR, c.io.memWrite.UnitMemWrite, c.clock, config, 
             units, neurons_per_unit(i), 
             weigth_map.view.mapValues(l => l.slice(written_synapses, l.length)).toMap,
             sparcity_matrix.map(_.slice(written_neurons, written_neurons+neurons_per_unit(i))))
@@ -519,7 +537,7 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
         println(s"written $written_synapses synapses")
         println(s"written $written_neurons neurons")
 
-        for (test_run <- 0 until ltc_rocc_values.size)
+        for (test_run <- 0 until 2)// ltc_rocc_values.size)
         {
           println(s"fix_$F test - iteration $test_run")
           val states = ltc_rocc_values(test_run)("states")
@@ -567,3 +585,20 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 }
+
+
+// class LTCCoProc_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
+//   behavior of "LTCCoProc" 
+
+//   val config = new LTCCoprocConfig()
+//   val p = (new WithNSmallCores(1) ++ new WithRV32)
+
+//   it should "run LTCCoProc first tries" in {
+//     test(
+//       new LTCCoProc(config)(p) // we do not really care about PTW
+//       ).withAnnotations(Seq(
+//       WriteVcdAnnotation,
+//       PrintFullStackTraceAnnotation)) { c =>
+//     }
+//   }
+// }

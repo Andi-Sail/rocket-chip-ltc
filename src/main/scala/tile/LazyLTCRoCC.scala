@@ -143,7 +143,7 @@ class LTCCoprocConfig(
   val N_Units : Int = 5,
   val ltc_out_queue_size : Int = 10,
   // from core parameters
-  val xLen : Int = 32,
+  var xLen : Int = 32,
 
   val DEBUG : Boolean = true
 )  { 
@@ -171,7 +171,6 @@ class LTCUnit_SparcityMatWrite(val addrWidth : Int) extends Bundle {
 }
 
 class LTCUnit_MemoryWriteIF(val w: Int, val synapseCounterWidth : Int, val ramBlockArrdWidth : Int, val neuronCounterWidth : Int) extends Bundle {
-  val N_out_neurons_write = Flipped(Valid(UInt(neuronCounterWidth.W)))
   val sparcity_write = Flipped(Valid(new LTCUnit_SparcityMatWrite(synapseCounterWidth)))
   val weight_write = Flipped(Valid(new LTCUnit_WeightWrite(w, ramBlockArrdWidth))) 
 
@@ -181,10 +180,6 @@ class LTCUnit_MemoryWriteIF(val w: Int, val synapseCounterWidth : Int, val ramBl
 class LTCUnit_DataOut(val config : LTCCoprocConfig) extends Bundle {
   val act     = FixedPoint(config.w.W, config.f.BP)
   val rev_act = FixedPoint(config.w.W, config.f.BP)
-}
-
-class LTCUnit_CSR(val config : LTCCoprocConfig) extends Bundle {
-  val unit_out_missed_count = Output(UInt(config.xLen.W))
 }
 
 class LTCCore_StateWrite(val config : LTCCoprocConfig) extends Bundle {
@@ -197,19 +192,157 @@ class LTCCore_MemoryWriteIF(val config : LTCCoprocConfig) extends Bundle {
   val UnitAddr = Input(UInt(config.UnitAddrWidth.W))
 
   val stateWrite = Flipped(Valid(new LTCCore_StateWrite(config)))
-
-  val N_Neurons_write = Flipped(Valid(UInt(config.neuronCounterWidth.W)))
-  val Max_out_Neurons_write = Flipped(Valid(UInt(config.neuronCounterWidth.W)))
-  val Max_synapses_write = Flipped(Valid(UInt(config.synapseCounterWidth.W)))
 }
 
-class LTCCore_CSR(val config : LTCCoprocConfig) extends Bundle {
-  // val units_csr = (0 until config.N_Units).map { i => new LTCUnit_CSR(config) }.toList
-  // (0 until config.N_Units).map{ i => Module(new LTCUnit(config, unitID=i))}.toList
+object LTCUnit_CSRs extends ChiselEnum {
+  val n_out_neurons, missed_out_values, result_addr = Value
+  val readOnlyCSRs = List(
+    missed_out_values
+  )
+
+  // TODO: should generate header file for code
+  for (i <- this.all) {
+    val enumName = i.toString().split("=")(1).replaceAll("\\)", "")
+    println(s"#define CSR_UNIT_${enumName} ${i.litValue}")
+  }
 }
 
+object LTCCore_CSRs extends ChiselEnum {
+  val n_neurons, max_synapses, max_out_neurons, state_addr, n_units = Value
+  val readOnlyCSRs = List(
+    n_units
+    // TODO: maybe add other interesting config params
+  )
+
+  // TODO: should generate header file for code
+  for (i <- this.all) {
+    val enumName = i.toString().split("=")(1).replaceAll("\\)", "")
+    println(s"#define CSR_CORE_${enumName} ${i.litValue}")
+  }
+}
+
+class LTCUnit_CSRs_IO(config : LTCCoprocConfig) extends Bundle {
+  val csrWrite = Flipped(Valid(UInt(config.xLen.W)))
+  val csrRead = Output(UInt(config.xLen.W))
+  
+  val csrSel = Flipped(Valid(LTCUnit_CSRs()))
+}
+
+class LTCCore_CSRs_IO(config : LTCCoprocConfig) extends Bundle {
+  val csrWrite = Flipped(Valid(UInt(config.xLen.W)))
+  val csrRead = Output(UInt(config.xLen.W))
+  
+  val csrSel = Flipped(Valid(LTCCore_CSRs()))
+
+  val UnitAddr = Input(UInt(config.UnitAddrWidth.W))
+  val UnitCSR = new LTCUnit_CSRs_IO(config)
+}
+
+// TODO: maybe generate this from excel - hard coded for now...
+object LTCCoProc_FuncDef {
+  val run = 0
+  val load_state = 1
+
+  val get_core_csr = 64
+  val set_core_csr = 65
+  val get_unit_csr = 66
+  val set_unit_csr = 67
+
+  def isCoreCSR(func : Bits) : Bool = {
+    return ((func === get_core_csr.U) || (func === set_core_csr.U))
+  }
+  def isUnitCSR(func : Bits) : Bool = {
+    return ((func === get_unit_csr.U) || (func === set_unit_csr.U))
+  }  
+  def isSetCSR(func : Bits) : Bool = {
+    return ((func === set_core_csr.U) || (func === set_unit_csr.U))
+  }
+  def isGetCSR(func : Bits) : Bool = {
+    return ((func === get_core_csr.U) || (func === get_unit_csr.U))
+  }
+}
 
 // --- components --- (top down)
+class LTCCoProcRoCC(opcodes: OpcodeSet, config : LTCCoprocConfig)(implicit p: Parameters) extends LazyRoCC(opcodes) {
+  override lazy val module = new LTCCoProcImp(this, config : LTCCoprocConfig)
+}
+
+class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: Parameters) extends LazyRoCCModuleImp(outer)
+    with HasCoreParameters {
+  // adapt config for current core parameters
+  config.xLen = xLen
+
+  dontTouch(io)    
+  io <> DontCare
+
+  val cmd = io.cmd
+  // val cmd = Queue(io.cmd)
+  // cmd <> DontCare
+
+  val resp_rd = Reg(chiselTypeOf(io.resp.bits.rd))
+  val cmd_dprv = Reg(chiselTypeOf(cmd.bits.status.dprv))
+  val cmd_dv = Reg(chiselTypeOf(cmd.bits.status.dv))
+
+  val core = Module(new LTCCore(config))
+  dontTouch(core.io)
+  core.io <> DontCare
+  core.io.en := false.B
+
+  val s_idle :: s_run :: s_load_state :: s_load_sparcity :: s_load_weight :: s_resp :: Nil = Enum(6)
+  val state = RegInit(s_idle)
+
+  // default assignement for valids // TODO: should be more generic (idea: add trait e.g. HasValid, providing a function that collects and initializes all valids)
+  core.io.csr.csrSel.valid := false.B
+  core.io.csr.csrWrite.valid := false.B
+  core.io.csr.UnitCSR.csrSel.valid := false.B
+  core.io.csr.UnitCSR.csrWrite.valid := false.B
+  when (cmd.fire) {
+    resp_rd := io.cmd.bits.inst.rd
+    cmd_dprv := cmd.bits.status.dprv
+    cmd_dv := cmd.bits.status.dv
+        
+    when (LTCCoProc_FuncDef.isCoreCSR(cmd.bits.inst.funct)) {
+      state := s_resp
+      core.io.csr.csrSel.bits := LTCCore_CSRs(cmd.bits.rs1(LTCCore_CSRs.getWidth))
+      core.io.csr.csrSel.valid := true.B
+      core.io.csr.csrWrite.bits := cmd.bits.rs2
+      core.io.csr.csrWrite.valid := LTCCoProc_FuncDef.isSetCSR(cmd.bits.inst.funct)
+    }.elsewhen (LTCCoProc_FuncDef.isUnitCSR(cmd.bits.inst.funct)) {
+      state := s_resp
+      core.io.csr.UnitAddr := cmd.bits.rs1 >> (config.xLen /2)
+      core.io.csr.UnitCSR.csrSel.bits := LTCUnit_CSRs(cmd.bits.rs1(LTCUnit_CSRs.getWidth))
+      core.io.csr.UnitCSR.csrSel.valid := true.B
+      core.io.csr.UnitCSR.csrWrite.bits := cmd.bits.rs2
+      core.io.csr.UnitCSR.csrWrite.valid := LTCCoProc_FuncDef.isSetCSR(cmd.bits.inst.funct)
+    }
+  }
+
+  io.busy := state =/= s_idle
+  io.cmd.ready := state === s_idle
+
+  io.resp.valid := state === s_resp
+  io.resp.bits.rd := resp_rd
+  when (io.resp.fire) {
+    state := s_idle
+  }
+
+  // MEMORY REQUEST INTERFACE
+  // io.mem.req.valid := cmd.valid && doWork && !stallReg && !stallResp
+  io.mem.req.valid := false.B // ( state === s_acc ) && req_addr_valid
+  io.mem.req.bits.addr := 0.U // base_address + (offset << 2)
+  io.mem.req.bits.tag := 0.U
+  io.mem.req.bits.cmd := M_XRD // perform a load (M_XWR for stores)
+  io.mem.req.bits.size := log2Up(4).U // maybe already defined as default???
+  io.mem.req.bits.signed := false.B
+  io.mem.req.bits.data := 0.U // we're not performing any stores...
+  io.mem.req.bits.phys := false.B
+  io.mem.req.bits.dprv := cmd_dprv
+  io.mem.req.bits.dv := cmd_dv
+
+  io.interrupt := false.B
+}
+
+
 
 class LTCCore(config : LTCCoprocConfig) extends Module {
   val io = IO(new Bundle {
@@ -225,7 +358,7 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
       val data_out = Output(new LTCUnit_DataOut(config))
       val valid_out = Output(Bool())
 
-      // val csr = new LTCCore_CSR(config)
+      val csr = new LTCCore_CSRs_IO(config)
 
   })
 
@@ -238,11 +371,25 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
   io <> DontCare
   for (u <- ltc_units) { u.io <> DontCare }
 
-  // config write
-  val N_Neurons       = RegEnable(io.memWrite.N_Neurons_write.bits, 0.U, io.memWrite.N_Neurons_write.valid)
-  val Max_out_Neurons = RegEnable(io.memWrite.Max_out_Neurons_write.bits, 0.U, io.memWrite.Max_out_Neurons_write.valid)
-  val Max_synapses    = RegEnable(io.memWrite.Max_synapses_write.bits, 0.U, io.memWrite.Max_synapses_write.valid) // TODO: is this necessary??
-
+  // Init and write registers
+  var csrs : Map[LTCCore_CSRs.Type, UInt] = Map()
+  LTCCore_CSRs.all.foreach{
+    c => csrs += (c -> {
+                        if (LTCCore_CSRs.readOnlyCSRs.contains(c)) {
+                          Reg(chiselTypeOf(io.csr.csrRead)).suggestName(c.toString().split("=")(1).replaceAll("\\)", ""))
+                        } else {
+                          RegEnable(io.csr.csrWrite.bits, 0.U, 
+                          (io.csr.csrSel.bits === c) && io.csr.csrSel.valid && io.csr.csrWrite.valid).suggestName(c.toString().split("=")(1).replaceAll("\\)", ""))
+                        }
+                      })}
+  // read registers
+  LTCCore_CSRs.all.foreach{ c =>
+    when ((io.csr.csrSel.bits === c) && io.csr.csrSel.valid) {
+      io.csr.csrRead := csrs(c)
+    }
+  }
+  // constant registers
+  csrs(LTCCore_CSRs.n_units) := config.N_Units.U
 
   // state memory
   val state_mem = SyncReadMem(config.maxNeurons, FixedPoint(config.w.W, config.f.BP))
@@ -250,8 +397,16 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
     state_mem(io.memWrite.stateWrite.bits.stateAddr) := io.memWrite.stateWrite.bits.stateValue.asFixedPoint(config.f.BP)
   }
 
-  // ltc unit memory write interface 
+  // ltc unit memory write and csr interface 
   for (i <- 0 until config.N_Units) { 
+    ltc_units(i).io.csr <> io.csr.UnitCSR
+    when (io.csr.UnitAddr === i.U(config.UnitAddrWidth.W)) {
+      ltc_units(i).io.csr.csrSel.valid := io.csr.UnitCSR.csrSel.valid
+      ltc_units(i).io.csr.csrWrite.valid := io.csr.UnitCSR.csrWrite.valid
+    }.otherwise {
+      ltc_units(i).io.csr.csrSel.valid := false.B
+      ltc_units(i).io.csr.csrWrite.valid := false.B
+    }
     ltc_units(i).io.memWrite <> io.memWrite.UnitMemWrite 
     when (io.memWrite.UnitAddr === i.U(config.UnitAddrWidth.W)) {
       ltc_units(i).io.memWrite.valids.zip(io.memWrite.UnitMemWrite.valids).foreach{ case (a, b) => a := b }
@@ -260,16 +415,11 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
     }
   }
 
-  // LTC Unit CSR
-  // for (i <- 0 until config.N_Units) { 
-  //   ltc_units(i).io.csr <> io.csr.units_csr(i)
-  // }
-
   val units_done = Wire(Bool())
 
   // Counter logic
   val input_neuron_counter = RegInit(0.U(config.neuronCounterWidth.W))
-  when ((input_neuron_counter === (N_Neurons-1.U)) || io.fire || units_done) { 
+  when ((input_neuron_counter === (csrs(LTCCore_CSRs.n_neurons)-1.U)) || io.fire || units_done) { 
     input_neuron_counter := 0.U
   }.elsewhen (io.en) {
     input_neuron_counter := input_neuron_counter + 1.U
@@ -278,7 +428,7 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
   val out_neuron_counter = RegInit(0.U(config.neuronCounterWidth.W))
   when (io.fire || units_done) { // NOTE: assumes will never overflow (as it never should, otherwise config is bad)
     out_neuron_counter := 0.U
-  }.elsewhen ((input_neuron_counter === (N_Neurons-1.U)) && io.en) {
+  }.elsewhen ((input_neuron_counter === (csrs(LTCCore_CSRs.n_neurons)-1.U)) && io.en) {
     out_neuron_counter := out_neuron_counter + 1.U
   }
 
@@ -300,7 +450,7 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
     u.io.j := out_neuron_counter
     u.io.k := synapse_counter
     u.io.x_z1 := current_state
-    u.io.last_state := (input_neuron_counter === (N_Neurons-1.U)) // TODO: does this need to be delayed too?  
+    u.io.last_state := (input_neuron_counter === (csrs(LTCCore_CSRs.n_neurons)-1.U)) // TODO: does this need to be delayed too?  
   }
 
   // Unit outputs
@@ -351,7 +501,7 @@ class LTCUnit(  val config  : LTCCoprocConfig, val unitID : Int = -1
 
       val memWrite = new LTCUnit_MemoryWriteIF(config.w, config.synapseCounterWidth, config.ramBlockArrdWidth, config.neuronCounterWidth)
 
-      val csr = new LTCUnit_CSR(config)
+      val csr = new LTCUnit_CSRs_IO(config)
   })
 
   // component instantiation
@@ -368,12 +518,14 @@ class LTCUnit(  val config  : LTCCoprocConfig, val unitID : Int = -1
   io <> DontCare
   sigmoid.io <> DontCare
 
-  val N_out_neurons = RegEnable(io.memWrite.N_out_neurons_write.bits, 0.U, io.memWrite.N_out_neurons_write.valid)
+  val N_out_neurons = RegEnable(
+    io.csr.csrWrite.bits, 0.U, 
+    io.csr.csrWrite.valid && io.csr.csrSel.valid && (io.csr.csrSel.bits === LTCUnit_CSRs.n_out_neurons))
 
   // memory definition
   var weight_mems : Map[LTCUnit_WeightSel.Type, SyncReadMem[FixedPoint] ] = Map()
   LTCUnit_WeightSel.all.foreach{
-    m => weight_mems += (m -> SyncReadMem(pow(2, config.ramBlockArrdWidth).toInt, FixedPoint(config.w.W, config.f.BP)))
+    m => weight_mems += (m -> SyncReadMem(pow(2, config.ramBlockArrdWidth).toInt, FixedPoint(config.w.W, config.f.BP)).suggestName("MEM_" + m.toString().split("=")(1).replaceAll("\\)", "")))
   }
   val sparcity_mem = SyncReadMem(config.maxSynapses, Bool())
 
@@ -473,14 +625,22 @@ class LTCUnit(  val config  : LTCCoprocConfig, val unitID : Int = -1
     io.unit_out.bits.rev_act := rev_act_accu
   }
 
+  val out_missed_count = RegInit(0.U(config.xLen.W))
   if (config.DEBUG) {
-    val out_missed_count = RegInit(0.U(config.xLen.W))
-    when(io.unit_out.valid && !io.unit_out.ready) {
+    when(io.unit_out.valid && !io.unit_out.ready && io.en) {
       out_missed_count := out_missed_count + 1.U
       printf("LTC Unit output was missed!!!! \n")
     }
-    io.csr.unit_out_missed_count := out_missed_count
   }
+
+  // this is not the proper general way to do this, but it is done like this for historical reasons
+  when (io.csr.csrSel.valid) {
+    switch (io.csr.csrSel.bits) {
+      is (LTCUnit_CSRs.n_out_neurons) { io.csr.csrRead := N_out_neurons }
+      is (LTCUnit_CSRs.missed_out_values) { io.csr.csrRead := out_missed_count }
+    }
+  }  
+
 }
 
 class HardSigmoid(val config : LTCCoprocConfig) extends Module {

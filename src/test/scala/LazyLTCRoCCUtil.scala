@@ -11,6 +11,8 @@ import io.circe._
 import io.circe.parser._
 import chisel3.util.Valid
 import freechips.rocketchip.tile.LTCCore_StateWrite
+import freechips.rocketchip.tile.LTCUnit_CSRs_IO
+import freechips.rocketchip.tile.LTCUnit_CSRs
 
 /**
   * Utility functions to read test data
@@ -83,14 +85,17 @@ object LTCTestUtil {
     * @param weigth_map model weights
     * @param sparcity_matrix model sparcity matrix
     */
-  def WriteModelData2Unit(mem_if : LTCUnit_MemoryWriteIF, clock : Clock, config : LTCCoprocConfig,
+  def WriteModelData2Unit(csr : LTCUnit_CSRs_IO, mem_if : LTCUnit_MemoryWriteIF, clock : Clock, config : LTCCoprocConfig,
   N_in_neurons : Int, N_out_neurons : Int, weigth_map : Map[LTCUnit_WeightSel.Type, List[Int]], sparcity_matrix : Array[List[Int]]) : Int = {
 
         // write N out neurons
-        mem_if.N_out_neurons_write.bits.poke(N_out_neurons)
-        mem_if.N_out_neurons_write.valid.poke(true)
+        csr.csrWrite.bits.poke(N_out_neurons)
+        csr.csrWrite.valid.poke(true)
+        csr.csrSel.bits.poke(LTCUnit_CSRs.n_out_neurons)
+        csr.csrSel.valid.poke(true)
         clock.step()
-        mem_if.N_out_neurons_write.valid.poke(false)
+        csr.csrSel.valid.poke(false)
+        csr.csrWrite.valid.poke(false)
         clock.step()
 
         val out_neurons_fanint = Array.fill(N_out_neurons)(0)
