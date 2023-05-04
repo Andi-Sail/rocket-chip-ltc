@@ -291,6 +291,8 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
   val s_idle :: s_run :: s_load_state :: s_load_sparcity :: s_load_weight :: s_resp :: Nil = Enum(6)
   val state = RegInit(s_idle)
 
+  val resp_data_reg = Reg(chiselTypeOf(io.resp.bits.data))
+
   // default assignement for valids // TODO: should be more generic (idea: add trait e.g. HasValid, providing a function that collects and initializes all valids)
   core.io.csr.csrSel.valid := false.B
   core.io.csr.csrWrite.valid := false.B
@@ -307,6 +309,7 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
       core.io.csr.csrSel.valid := true.B
       core.io.csr.csrWrite.bits := cmd.bits.rs2
       core.io.csr.csrWrite.valid := LTCCoProc_FuncDef.isSetCSR(cmd.bits.inst.funct)
+      resp_data_reg := (core.io.csr.csrRead).suggestName("csr_core_Read_reg")
     }.elsewhen (LTCCoProc_FuncDef.isUnitCSR(cmd.bits.inst.funct)) {
       state := s_resp
       core.io.csr.UnitAddr := cmd.bits.rs1 >> (config.xLen /2)
@@ -314,6 +317,7 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
       core.io.csr.UnitCSR.csrSel.valid := true.B
       core.io.csr.UnitCSR.csrWrite.bits := cmd.bits.rs2
       core.io.csr.UnitCSR.csrWrite.valid := LTCCoProc_FuncDef.isSetCSR(cmd.bits.inst.funct)
+      resp_data_reg := (core.io.csr.UnitCSR.csrRead).suggestName("csr_unit_Read_reg")
     }
   }
 
@@ -321,6 +325,7 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
   io.cmd.ready := state === s_idle
 
   io.resp.valid := state === s_resp
+  io.resp.bits.data := resp_data_reg
   io.resp.bits.rd := resp_rd
   when (io.resp.fire) {
     state := s_idle
@@ -376,10 +381,10 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
   LTCCore_CSRs.all.foreach{
     c => csrs += (c -> {
                         if (LTCCore_CSRs.readOnlyCSRs.contains(c)) {
-                          Reg(chiselTypeOf(io.csr.csrRead)).suggestName(c.toString().split("=")(1).replaceAll("\\)", ""))
+                          Reg(chiselTypeOf(io.csr.csrRead)).suggestName("CSR_R_" + c.toString().split("=")(1).replaceAll("\\)", ""))
                         } else {
                           RegEnable(io.csr.csrWrite.bits, 0.U, 
-                          (io.csr.csrSel.bits === c) && io.csr.csrSel.valid && io.csr.csrWrite.valid).suggestName(c.toString().split("=")(1).replaceAll("\\)", ""))
+                          (io.csr.csrSel.bits === c) && io.csr.csrSel.valid && io.csr.csrWrite.valid).suggestName("CSR_W_" + c.toString().split("=")(1).replaceAll("\\)", ""))
                         }
                       })}
   // read registers
@@ -399,8 +404,8 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
 
   // ltc unit memory write and csr interface 
   for (i <- 0 until config.N_Units) { 
-    ltc_units(i).io.csr <> io.csr.UnitCSR
     when (io.csr.UnitAddr === i.U(config.UnitAddrWidth.W)) {
+      ltc_units(i).io.csr <> io.csr.UnitCSR
       ltc_units(i).io.csr.csrSel.valid := io.csr.UnitCSR.csrSel.valid
       ltc_units(i).io.csr.csrWrite.valid := io.csr.UnitCSR.csrWrite.valid
     }.otherwise {
