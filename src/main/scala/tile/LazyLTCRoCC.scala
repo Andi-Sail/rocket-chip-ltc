@@ -279,10 +279,6 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
   // val cmd = Queue(io.cmd)
   // cmd <> DontCare
 
-  val resp_rd = Reg(chiselTypeOf(io.resp.bits.rd))
-  val cmd_dprv = Reg(chiselTypeOf(cmd.bits.status.dprv))
-  val cmd_dv = Reg(chiselTypeOf(cmd.bits.status.dv))
-
   val core = Module(new LTCCore(config))
   dontTouch(core.io)
   core.io <> DontCare
@@ -291,21 +287,28 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
   val s_idle :: s_run :: s_load_state :: s_load_sparcity :: s_load_weight :: s_resp :: Nil = Enum(6)
   val state = RegInit(s_idle)
 
+  // register required instruciton values
+  val resp_rd = Reg(chiselTypeOf(io.resp.bits.rd))
+  val cmd_dprv = Reg(chiselTypeOf(cmd.bits.status.dprv))
+  val cmd_dv = Reg(chiselTypeOf(cmd.bits.status.dv))
+  when (cmd.fire) {
+    resp_rd := io.cmd.bits.inst.rd
+    cmd_dprv := cmd.bits.status.dprv
+    cmd_dv := cmd.bits.status.dv
+  }
+
   val resp_data_reg = Reg(chiselTypeOf(io.resp.bits.data))
 
+  // read and write CSRs
   // default assignement for valids // TODO: should be more generic (idea: add trait e.g. HasValid, providing a function that collects and initializes all valids)
   core.io.csr.csrSel.valid := false.B
   core.io.csr.csrWrite.valid := false.B
   core.io.csr.UnitCSR.csrSel.valid := false.B
   core.io.csr.UnitCSR.csrWrite.valid := false.B
   when (cmd.fire) {
-    resp_rd := io.cmd.bits.inst.rd
-    cmd_dprv := cmd.bits.status.dprv
-    cmd_dv := cmd.bits.status.dv
-        
     when (LTCCoProc_FuncDef.isCoreCSR(cmd.bits.inst.funct)) {
       state := s_resp
-      core.io.csr.csrSel.bits := LTCCore_CSRs(cmd.bits.rs1(LTCCore_CSRs.getWidth))
+      core.io.csr.csrSel.bits := LTCCore_CSRs(cmd.bits.rs1(LTCCore_CSRs.getWidth-1,0))
       core.io.csr.csrSel.valid := true.B
       core.io.csr.csrWrite.bits := cmd.bits.rs2
       core.io.csr.csrWrite.valid := LTCCoProc_FuncDef.isSetCSR(cmd.bits.inst.funct)
@@ -313,11 +316,70 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
     }.elsewhen (LTCCoProc_FuncDef.isUnitCSR(cmd.bits.inst.funct)) {
       state := s_resp
       core.io.csr.UnitAddr := cmd.bits.rs1 >> (config.xLen /2)
-      core.io.csr.UnitCSR.csrSel.bits := LTCUnit_CSRs(cmd.bits.rs1(LTCUnit_CSRs.getWidth))
+      core.io.csr.UnitCSR.csrSel.bits := LTCUnit_CSRs(cmd.bits.rs1(LTCUnit_CSRs.getWidth-1,0))
       core.io.csr.UnitCSR.csrSel.valid := true.B
       core.io.csr.UnitCSR.csrWrite.bits := cmd.bits.rs2
       core.io.csr.UnitCSR.csrWrite.valid := LTCCoProc_FuncDef.isSetCSR(cmd.bits.inst.funct)
       resp_data_reg := (core.io.csr.UnitCSR.csrRead).suggestName("csr_unit_Read_reg")
+    }
+  }
+
+  val current_load_addr = Reg(UInt(config.xLen.W))
+  val final_load_addr = Reg(UInt(config.xLen.W))
+  val mem_req_addr_valid = Reg(Bool())
+
+  // load state
+  when (cmd.fire && (cmd.bits.inst.funct === LTCCoProc_FuncDef.load_state.U)) {
+    state := s_load_state
+    current_load_addr := core.io.state_addr
+    final_load_addr := core.io.state_addr + ((core.io.n_neurons-1.U) << 2) 
+    mem_req_addr_valid := true.B
+  }
+
+  // Handle Memory request response
+  
+  when (io.mem.req.fire) {
+    mem_req_addr_valid := false.B
+  }
+
+  when (io.mem.resp.valid && ((state === s_load_state) || (state === s_load_sparcity) || (state === s_load_weight))) { // NOTE: only update on response, b.c. on request does not work somehow
+    when(current_load_addr === final_load_addr){
+      state := s_resp 
+      resp_data_reg := 0.U // maybe better to just not do this 🥨
+    }.otherwise{
+      current_load_addr := current_load_addr + 4.U
+      mem_req_addr_valid := true.B
+    }
+  }
+
+
+  // MEMORY REQUEST INTERFACE
+  // io.mem.req.valid := cmd.valid && doWork && !stallReg && !stallResp
+  io.mem.req.valid := mem_req_addr_valid
+  io.mem.req.bits.addr := current_load_addr
+  io.mem.req.bits.tag := 0.U
+  io.mem.req.bits.cmd := M_XRD // perform a load (M_XWR for stores)
+  io.mem.req.bits.size := log2Up(4).U // maybe already defined as default???
+  io.mem.req.bits.signed := false.B
+  io.mem.req.bits.data := 0.U // we're not performing any stores... for now
+  io.mem.req.bits.phys := false.B
+  io.mem.req.bits.dprv := cmd_dprv
+  io.mem.req.bits.dv := cmd_dv
+
+
+  // connect memory response interface
+  switch (state) {
+    is (s_load_state) {
+      core.io.memWrite.stateWrite.valid := io.mem.resp.valid
+      core.io.memWrite.stateWrite.bits.stateValue := io.mem.resp.bits.data_raw.asSInt // TODO: this probably only works for 32 bit
+    } 
+    is (s_load_sparcity) {
+      core.io.memWrite.UnitMemWrite.sparcity_write.valid := io.mem.resp.valid
+      core.io.memWrite.UnitMemWrite.sparcity_write.bits.writeData := io.mem.resp.bits.data_raw.orR // TODO: this probably only works for 32 bit
+    }
+    is (s_load_weight) {
+      core.io.memWrite.UnitMemWrite.weight_write.valid := io.mem.resp.valid
+      core.io.memWrite.UnitMemWrite.weight_write.bits.writeData := io.mem.resp.bits.data_raw.asSInt // TODO: this probably only works for 32 bit
     }
   }
 
@@ -330,19 +392,6 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
   when (io.resp.fire) {
     state := s_idle
   }
-
-  // MEMORY REQUEST INTERFACE
-  // io.mem.req.valid := cmd.valid && doWork && !stallReg && !stallResp
-  io.mem.req.valid := false.B // ( state === s_acc ) && req_addr_valid
-  io.mem.req.bits.addr := 0.U // base_address + (offset << 2)
-  io.mem.req.bits.tag := 0.U
-  io.mem.req.bits.cmd := M_XRD // perform a load (M_XWR for stores)
-  io.mem.req.bits.size := log2Up(4).U // maybe already defined as default???
-  io.mem.req.bits.signed := false.B
-  io.mem.req.bits.data := 0.U // we're not performing any stores...
-  io.mem.req.bits.phys := false.B
-  io.mem.req.bits.dprv := cmd_dprv
-  io.mem.req.bits.dv := cmd_dv
 
   io.interrupt := false.B
 }
@@ -365,6 +414,10 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
 
       val csr = new LTCCore_CSRs_IO(config)
 
+      // maybe there should be a generic way to access CSRs, or proc should have those as CSRs, this wasn't really the idea
+      val state_addr = Output(UInt(config.xLen.W))
+      val n_neurons = Output(UInt(config.xLen.W))
+      val result_addrs =  Vec(config.N_Units, Output(UInt(config.xLen.W)))
   })
 
   // component instantiation
@@ -395,6 +448,8 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
   }
   // constant registers
   csrs(LTCCore_CSRs.n_units) := config.N_Units.U
+  io.state_addr := csrs(LTCCore_CSRs.state_addr)
+  io.n_neurons := csrs(LTCCore_CSRs.n_neurons)
 
   // state memory
   val state_mem = SyncReadMem(config.maxNeurons, FixedPoint(config.w.W, config.f.BP))
@@ -418,6 +473,7 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
     }.otherwise {
       ltc_units(i).io.memWrite.valids.foreach(_ := false.B)
     }
+    io.result_addrs(i) := ltc_units(i).io.result_addr
   }
 
   val units_done = Wire(Bool())
@@ -507,6 +563,8 @@ class LTCUnit(  val config  : LTCCoprocConfig, val unitID : Int = -1
       val memWrite = new LTCUnit_MemoryWriteIF(config.w, config.synapseCounterWidth, config.ramBlockArrdWidth, config.neuronCounterWidth)
 
       val csr = new LTCUnit_CSRs_IO(config)
+
+      val result_addr = Output(UInt(config.xLen.W))
   })
 
   // component instantiation
@@ -526,6 +584,11 @@ class LTCUnit(  val config  : LTCCoprocConfig, val unitID : Int = -1
   val N_out_neurons = RegEnable(
     io.csr.csrWrite.bits, 0.U, 
     io.csr.csrWrite.valid && io.csr.csrSel.valid && (io.csr.csrSel.bits === LTCUnit_CSRs.n_out_neurons))
+
+  val result_addr = RegEnable(
+    io.csr.csrWrite.bits, 0.U, 
+    io.csr.csrWrite.valid && io.csr.csrSel.valid && (io.csr.csrSel.bits === LTCUnit_CSRs.result_addr))
+  io.result_addr := result_addr
 
   // memory definition
   var weight_mems : Map[LTCUnit_WeightSel.Type, SyncReadMem[FixedPoint] ] = Map()
@@ -638,11 +701,12 @@ class LTCUnit(  val config  : LTCCoprocConfig, val unitID : Int = -1
     }
   }
 
-  // this is not the proper general way to do this, but it is done like this for historical reasons
+  // this is not the proper generic way to do this, but it is done like this for historical reasons
   when (io.csr.csrSel.valid) {
     switch (io.csr.csrSel.bits) {
       is (LTCUnit_CSRs.n_out_neurons) { io.csr.csrRead := N_out_neurons }
       is (LTCUnit_CSRs.missed_out_values) { io.csr.csrRead := out_missed_count }
+      is (LTCUnit_CSRs.result_addr) { io.csr.csrRead := result_addr }
     }
   }  
 

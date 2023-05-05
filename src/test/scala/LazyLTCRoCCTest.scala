@@ -586,6 +586,19 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
   }
 }
 
+class CRS_Enum_test  extends AnyFlatSpec with ChiselScalatestTester {
+  behavior of "LTCCoProc" 
+
+  var csrSel : LTCCore_CSRs.Type = LTCCore_CSRs()
+  println(s"csrSel is $csrSel")
+  
+  for (i <- 0 until 5) {
+    csrSel = LTCCore_CSRs(i.U)
+    println(s"with $i - csrSel is $csrSel")
+  }
+
+  println(s"LTCCore_CSRs.getWidth = ${LTCCore_CSRs.getWidth}")
+}
 
 // class LTCCoProc_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
 //   behavior of "LTCCoProc" 
