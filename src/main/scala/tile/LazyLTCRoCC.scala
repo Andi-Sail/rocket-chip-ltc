@@ -293,7 +293,10 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
   core.io <> DontCare
   core.io.en := false.B
 
-  val s_idle :: s_run :: s_load_state :: s_load_sparcity :: s_load_weight :: s_resp :: Nil = Enum(6)
+  val s_idle :: s_run :: s_load_state :: s_load_sparcity :: s_load_weight :: s_resp :: s_wait_result_write :: Nil = Enum(7)
+  def IsLoadState(s : UInt) : Bool = {
+    ((s === s_load_state) || (s === s_load_sparcity) || (s === s_load_weight))
+  }
   val state = RegInit(s_idle)
 
   // register required instruciton values
@@ -333,79 +336,105 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
     }
   }
 
-  val current_load_addr = Reg(UInt(config.xLen.W))
+  val current_memory_addr = Reg(UInt(config.xLen.W))
+  val act_rev_memory_addr = Reg(UInt(config.xLen.W))
   val final_load_addr = Reg(UInt(config.xLen.W))
-  val mem_req_addr_valid = Reg(Bool())
+  val mem_req_valid = Reg(Bool())
   val mem_write_unit_addr = Reg(chiselTypeOf(core.io.memWrite.UnitAddr))
   val mem_write_weight_sel = Reg(LTCUnit_WeightSel())
 
   // load state
   when (cmd.fire && (cmd.bits.inst.funct === LTCCoProc_FuncDef.load_state.U)) {
     state := s_load_state
-    current_load_addr := core.io.state_addr
+    current_memory_addr := core.io.state_addr
     final_load_addr := core.io.state_addr + ((core.io.n_neurons-1.U) << 2) 
-    mem_req_addr_valid := true.B
+    mem_req_valid := true.B
   }
 
   // load sparcity and weights
   when (cmd.fire && (cmd.bits.inst.funct === LTCCoProc_FuncDef.load_sparcity.U)) {
     state := s_load_sparcity
-    current_load_addr := cmd.bits.rs2
-    final_load_addr := core.io.state_addr + (((cmd.bits.rs1(config.xLen/2 -1,0))-1.U) << 2) 
+    current_memory_addr := cmd.bits.rs2
+    final_load_addr :=  cmd.bits.rs2 + (((cmd.bits.rs1(config.xLen/2 -1,0))-1.U) << 2) 
     mem_write_unit_addr := cmd.bits.rs1(3*config.xLen / 4 - 1, config.xLen /2)
-    mem_req_addr_valid := true.B
+    mem_req_valid := true.B
   }
   when (cmd.fire && (cmd.bits.inst.funct === LTCCoProc_FuncDef.load_weight.U)) {
     state := s_load_weight
-    current_load_addr := cmd.bits.rs2
-    final_load_addr := core.io.state_addr + (((cmd.bits.rs1(config.xLen/2 -1,0))-1.U) << 2) 
+    current_memory_addr := cmd.bits.rs2
+    final_load_addr :=  cmd.bits.rs2 + (((cmd.bits.rs1(config.xLen/2 -1,0))-1.U) << 2) 
     mem_write_unit_addr := cmd.bits.rs1(3*config.xLen / 4 - 1, config.xLen /2)
     mem_write_weight_sel := LTCUnit_WeightSel(cmd.bits.rs1(config.xLen /2 + LTCUnit_WeightSel.getWidth -1, config.xLen /2))
-    mem_req_addr_valid := true.B
+    mem_req_valid := true.B
   }
 
   // run inference
+  val unit_out_cnt = RegInit(VecInit.fill(config.N_Units) { (0.U(config.neuronCounterWidth.W)) })
+  val result_write_pending = RegInit(false.B)
   val core_fire_evt = RegInit(false.B)
   core_fire_evt := false.B
   when (cmd.fire && (cmd.bits.inst.funct === LTCCoProc_FuncDef.run.U)) {
     state := s_run
     core_fire_evt := true.B
+    unit_out_cnt.foreach(_ := 0.U)
   }
 
   core.io.fire := core_fire_evt
   when (core.io.done && !RegNext(core.io.done)) {
     // change state on rising edge of done (as done will stay high until next fire)
-    state := s_resp
+    state := Mux(result_write_pending, s_wait_result_write, s_resp)
+  }
+
+  // write ltc results
+  val writing_act = RegInit(false.B) // writing rev act otherwise
+  val canTakeResult = RegInit(true.B)
+  val result_act_out = Reg(chiselTypeOf(core.io.data_out.bits.act))
+  val result_rev_act_out = Reg(chiselTypeOf(core.io.data_out.bits.rev_act))
+  core.io.data_out.ready := canTakeResult
+  when (core.io.data_out.fire) {
+    result_write_pending := true.B
+    canTakeResult := false.B
+    writing_act := true.B
+    result_act_out := core.io.data_out.bits.act
+    result_rev_act_out := core.io.data_out.bits.rev_act
+    current_memory_addr := core.io.result_act_addr + (unit_out_cnt(core.io.chosen_out) << 2) // using unit cnt directly
+    act_rev_memory_addr := core.io.result_rev_act_addr + (unit_out_cnt(core.io.chosen_out) << 2) // using unit cnt directly
+    unit_out_cnt(core.io.chosen_out) := unit_out_cnt(core.io.chosen_out) + 1.U
+    mem_req_valid := true.B
   }
 
   // Handle Memory request response
   when (io.mem.req.fire) {
-    mem_req_addr_valid := false.B
+    mem_req_valid := false.B
   }
 
-  when (io.mem.resp.valid && ((state === s_load_state) || (state === s_load_sparcity) || (state === s_load_weight))) { // NOTE: only update on response, b.c. on request does not work somehow
-    when(current_load_addr === final_load_addr){
+  when (io.mem.resp.valid && IsLoadState(state)) { // NOTE: only update on response, b.c. on request does not work somehow
+    when(current_memory_addr === final_load_addr){
       state := s_resp 
       resp_data_reg := 0.U // maybe better to just not do this 🥨
     }.otherwise{
-      current_load_addr := current_load_addr + 4.U
-      mem_req_addr_valid := true.B
+      current_memory_addr := current_memory_addr + 4.U
+      mem_req_valid := true.B
     }
   }
 
-
-  // MEMORY REQUEST INTERFACE
-  // io.mem.req.valid := cmd.valid && doWork && !stallReg && !stallResp
-  io.mem.req.valid := mem_req_addr_valid
-  io.mem.req.bits.addr := current_load_addr
-  io.mem.req.bits.tag := 0.U
-  io.mem.req.bits.cmd := M_XRD // perform a load (M_XWR for stores)
-  io.mem.req.bits.size := log2Up(4).U // maybe already defined as default???
-  io.mem.req.bits.signed := false.B
-  io.mem.req.bits.data := 0.U // we're not performing any stores... for now
-  io.mem.req.bits.phys := false.B
-  io.mem.req.bits.dprv := cmd_dprv
-  io.mem.req.bits.dv := cmd_dv
+  when (io.mem.resp.valid && (state===s_run || state===s_wait_result_write)) {
+    when (writing_act) {
+      canTakeResult := false.B
+      writing_act := false.B // writing rev_act next
+      current_memory_addr := act_rev_memory_addr
+      mem_req_valid := true.B
+    }.otherwise {
+      // waiting for next result
+      canTakeResult := true.B
+      writing_act := true.B 
+      mem_req_valid := false.B
+      result_write_pending := false.B
+      when (state===s_wait_result_write) {
+        state := s_resp
+      }
+    }
+  }
 
 
   // connect memory response interface
@@ -428,8 +457,23 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
       core.io.memWrite.UnitAddr := mem_write_unit_addr
       core.io.memWrite.UnitMemWrite.weight_write.bits.writeSelect := mem_write_weight_sel
     }
+    is (s_run) {
+    }
   }
+  
+  // MEMORY REQUEST INTERFACE
+  io.mem.req.valid := mem_req_valid
+  io.mem.req.bits.addr := current_memory_addr
+  io.mem.req.bits.tag := 0.U
+  io.mem.req.bits.cmd := Mux(state === s_run, M_XWR, M_XRD)
+  io.mem.req.bits.size := log2Up(4).U // maybe already defined as default???
+  io.mem.req.bits.signed := false.B
+  io.mem.req.bits.data := Mux(writing_act, result_act_out, result_rev_act_out).asInstanceOf[Bits].asUInt
+  io.mem.req.bits.phys := false.B
+  io.mem.req.bits.dprv := cmd_dprv
+  io.mem.req.bits.dv := cmd_dv
 
+  // general rocc outputs
   io.busy := state =/= s_idle
   io.cmd.ready := state === s_idle
 
@@ -441,8 +485,6 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
   }
 
   io.interrupt := false.B
-
-  core.io.data_out.ready := true.B // TODO: must be set from memory interface!!!!
 }
 
 
@@ -457,7 +499,6 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
 
       val memWrite = new LTCCore_MemoryWriteIF(config)
 
-      // TODO: it's probably better to just feed the arbitrar outout out here
       val result_act_addr = Output(UInt(config.xLen.W))
       val result_rev_act_addr = Output(UInt(config.xLen.W))
       val data_out = Decoupled(new LTCUnit_DataOut(config))
@@ -468,7 +509,6 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
       // maybe there should be a generic way to access CSRs, or proc should have those as CSRs, this wasn't really the idea
       val state_addr = Output(UInt(config.xLen.W))
       val n_neurons = Output(UInt(config.xLen.W))
-      // val result_addrs =  Vec(config.N_Units, Output(UInt(config.xLen.W)))
   })
 
   // component instantiation
@@ -532,7 +572,6 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
     }.otherwise {
       ltc_units(i).io.memWrite.valids.foreach(_ := false.B)
     }
-    // io.result_addrs(i) := ltc_units(i).io.result_addr
   }
 
   val units_done = Wire(Bool())
@@ -594,14 +633,12 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
 
   for (i <- 0 until config.N_Units) {
     when (result_write_arbitrer.io.chosen === i.U) {
-      io.result_act_addr     := ltc_units(i).io.result_act_addr     + (out_neuron_counter << 2.U)
-      io.result_rev_act_addr := ltc_units(i).io.result_rev_act_addr + (out_neuron_counter << 2.U)
+      io.result_act_addr     := ltc_units(i).io.result_act_addr
+      io.result_rev_act_addr := ltc_units(i).io.result_rev_act_addr
     }
   }
   io.data_out <> result_write_arbitrer.io.out
   io.chosen_out := result_write_arbitrer.io.chosen
-  // when(result_write_arbitrer.io.out.fire) {
-  // }
 
 }
 

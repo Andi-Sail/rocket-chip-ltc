@@ -560,8 +560,10 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
           fork{
             var outputs_checked = 0
             val outputs_checked_of_unit = Array.fill(config.N_Units) {0}
-            c.io.data_out.ready.poke(true) // always ready - does not test with busy memory
             while (outputs_checked < units) {
+              c.io.data_out.ready.poke(false) // simulate memory busy for some random time
+              c.clock.step(scala.util.Random.between(0,10))
+              c.io.data_out.ready.poke(true) 
               while (!c.io.data_out.valid.peekBoolean()) {
                 c.clock.step()
               }
@@ -603,6 +605,39 @@ class CRS_Enum_test  extends AnyFlatSpec with ChiselScalatestTester {
 
   println(s"LTCCore_CSRs.getWidth = ${LTCCore_CSRs.getWidth}")
 }
+
+// class DummyAddrCalc(config : LTCCoprocConfig) extends Module {
+//   val io = IO(new Bundle{
+//     val valid = Input(Bool())
+//     val rs1 = Input(UInt(32.W))
+//     val rs2 = Input(UInt(32.W))
+
+//     val current_load_addr = Output(UInt(32.W))
+//     val final_load_addr = Output(UInt(32.W))
+//   })
+  
+//   val current_load_addr = Register(32.W)
+//   val final_load_addr = Register(32.W)
+
+//   when (io.valid) {
+//     current_load_addr := io.rs2
+//     final_load_addr := io.rs2 + (((io.rs1(config.xLen/2 -1,0))-1.U) << 2) 
+//   }
+// }
+
+// class AddrCalc_test extends AnyFlatSpec with ChiselScalatestTester {
+//   behavior of "LTCCoProc" 
+
+//   val config = new LTCCoprocConfig()
+  
+//   it should "calculate a current and final address given a size" in {
+//     test(new DummyAddrCalc(config)).withAnnotations(Seq(
+//       WriteVcdAnnotation,
+//       PrintFullStackTraceAnnotation)) { c =>
+//     }
+//   }
+// }
+// ----> nevermind, found the copy-paste errro 🤕
 
 // class LTCCoProc_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
 //   behavior of "LTCCoProc" 
