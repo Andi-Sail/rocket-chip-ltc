@@ -117,7 +117,7 @@ object LTCTestUtil {
         }
         mem_if.sparcity_write.valid.poke(false)
 
-        println("out_neurons_fanint")
+        println("out_neurons_fanin")
         println(out_neurons_fanint.toList)
         clock.step()
 

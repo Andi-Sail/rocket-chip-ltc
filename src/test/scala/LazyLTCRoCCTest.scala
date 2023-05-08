@@ -279,6 +279,7 @@ class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
 
       // activate unit and feed some states
       c.io.en.poke(true)
+      c.clock.step(scala.util.Random.between(1,50))
       c.io.unit_out.ready.poke(true) // we do not really care about data out here anyway
       c.io.fire.poke(true)
       var k = 0
@@ -373,6 +374,7 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
 
           // activate unit and feed some states
           c.io.en.poke(true)
+          c.clock.step(scala.util.Random.between(1,50))
           // c.clock.step(scala.util.Random.between(1,20))
           c.clock.step(5)
           fork{ timescope{
@@ -537,7 +539,7 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
         println(s"written $written_synapses synapses")
         println(s"written $written_neurons neurons")
 
-        for (test_run <- 0 until 2)// ltc_rocc_values.size)
+        for (test_run <- 0 until ltc_rocc_values.size)
         {
           println(s"fix_$F test - iteration $test_run")
           val states = ltc_rocc_values(test_run)("states")
@@ -549,6 +551,7 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
 
           // activate core and fire on 💥
           c.io.en.poke(true)
+          c.clock.step(scala.util.Random.between(1,50))
           fork{ timescope{
             c.io.fire.poke(true)
             c.clock.step()
@@ -557,15 +560,16 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
           fork{
             var outputs_checked = 0
             val outputs_checked_of_unit = Array.fill(config.N_Units) {0}
+            c.io.data_out.ready.poke(true) // always ready - does not test with busy memory
             while (outputs_checked < units) {
-              while (!c.io.valid_out.peekBoolean()) {
+              while (!c.io.data_out.valid.peekBoolean()) {
                 c.clock.step()
               }
               val unit_n = c.io.chosen_out.peekInt().toInt
               var neuron_n = outputs_checked_of_unit(unit_n)
               if (unit_n > 0) { neuron_n += blinag.sum(neurons_per_unit.slice(0,unit_n)) }
-              c.io.data_out.act.expect(FixedPoint(activation(neuron_n), W.W, F.BP), s"act missmatch for neuron $neuron_n from unit $unit_n in test run $test_run")
-              c.io.data_out.rev_act.expect(FixedPoint(rev_activation(neuron_n), W.W, F.BP), s"rev act missmatch for neuron $neuron_n from unit $unit_n in test run $test_run")
+              c.io.data_out.bits.act.expect(FixedPoint(activation(neuron_n), W.W, F.BP), s"act missmatch for neuron $neuron_n from unit $unit_n in test run $test_run")
+              c.io.data_out.bits.rev_act.expect(FixedPoint(rev_activation(neuron_n), W.W, F.BP), s"rev act missmatch for neuron $neuron_n from unit $unit_n in test run $test_run")
               outputs_checked_of_unit(unit_n) +=1
               outputs_checked += 1
               c.clock.step()
