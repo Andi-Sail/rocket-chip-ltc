@@ -256,6 +256,18 @@ object LTCCoProc_FuncDef {
   val set_core_csr = 65
   val get_unit_csr = 66
   val set_unit_csr = 67
+  
+  // TODO: should generate header file for code
+  println(s"#define FUNC_run           $run")
+  println(s"#define FUNC_load_state    $load_state")
+  println(s"#define FUNC_load_sparcity $load_sparcity")
+  println(s"#define FUNC_load_weight   $load_weight")
+  println(s"#define FUNC_get_core_csr  $get_core_csr")
+  println(s"#define FUNC_set_core_csr  $set_core_csr")
+  println(s"#define FUNC_get_unit_csr  $get_unit_csr")
+  println(s"#define FUNC_set_unit_csr  $set_unit_csr")
+
+
 
   def isCoreCSR(func : Bits) : Bool = {
     return ((func === get_core_csr.U) || (func === set_core_csr.U))
