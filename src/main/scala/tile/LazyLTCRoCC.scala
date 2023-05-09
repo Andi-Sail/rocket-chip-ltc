@@ -152,6 +152,7 @@ class LTCCoprocConfig(
   val synapseCounterWidth = log2Ceil(maxSynapses)
 
   val UnitAddrWidth = max(1, log2Ceil(N_Units)) // requires at least one bit
+  val wBytes = w / 8
 }
 
 // --- Bundels and Enums ---
@@ -349,6 +350,7 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
   }
 
   val current_memory_addr = Reg(UInt(config.xLen.W))
+  val memory_read_counter = Reg(UInt(config.synapseCounterWidth.W))
   val act_rev_memory_addr = Reg(UInt(config.xLen.W))
   val final_load_addr = Reg(UInt(config.xLen.W))
   val mem_req_valid = Reg(Bool())
@@ -361,6 +363,7 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
     current_memory_addr := core.io.state_addr
     final_load_addr := core.io.state_addr + ((core.io.n_neurons-1.U) << 2) 
     mem_req_valid := true.B
+    memory_read_counter := 0.U
   }
 
   // load sparcity and weights
@@ -370,14 +373,16 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
     final_load_addr :=  cmd.bits.rs2 + (((cmd.bits.rs1(config.xLen/2 -1,0))-1.U) << 2) 
     mem_write_unit_addr := cmd.bits.rs1(3*config.xLen / 4 - 1, config.xLen /2)
     mem_req_valid := true.B
+    memory_read_counter := 0.U
   }
   when (cmd.fire && (cmd.bits.inst.funct === LTCCoProc_FuncDef.load_weight.U)) {
     state := s_load_weight
     current_memory_addr := cmd.bits.rs2
     final_load_addr :=  cmd.bits.rs2 + (((cmd.bits.rs1(config.xLen/2 -1,0))-1.U) << 2) 
     mem_write_unit_addr := cmd.bits.rs1(3*config.xLen / 4 - 1, config.xLen /2)
-    mem_write_weight_sel := LTCUnit_WeightSel(cmd.bits.rs1(config.xLen /2 + LTCUnit_WeightSel.getWidth -1, config.xLen /2))
+    mem_write_weight_sel := LTCUnit_WeightSel(cmd.bits.rs1(3*config.xLen/4 + LTCUnit_WeightSel.getWidth -1, 3*config.xLen/4))
     mem_req_valid := true.B
+    memory_read_counter := 0.U
   }
 
   // run inference
@@ -425,7 +430,8 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
       state := s_resp 
       resp_data_reg := 0.U // maybe better to just not do this 🥨
     }.otherwise{
-      current_memory_addr := current_memory_addr + 4.U
+      current_memory_addr := current_memory_addr + config.wBytes.U
+      memory_read_counter := memory_read_counter + 1.U
       mem_req_valid := true.B
     }
   }
@@ -457,15 +463,18 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
     is (s_load_state) {
       core.io.memWrite.stateWrite.valid := io.mem.resp.valid
       core.io.memWrite.stateWrite.bits.stateValue := io.mem.resp.bits.data_raw.asSInt // TODO: this probably only works for 32 bit
+      core.io.memWrite.stateWrite.bits.stateAddr := memory_read_counter
     } 
     is (s_load_sparcity) {
       core.io.memWrite.UnitMemWrite.sparcity_write.valid := io.mem.resp.valid
       core.io.memWrite.UnitMemWrite.sparcity_write.bits.writeData := io.mem.resp.bits.data_raw(0) // TODO: this probably only works for 32 bit
+      core.io.memWrite.UnitMemWrite.sparcity_write.bits.writeAddr := memory_read_counter
       core.io.memWrite.UnitAddr := mem_write_unit_addr
     }
     is (s_load_weight) {
       core.io.memWrite.UnitMemWrite.weight_write.valid := io.mem.resp.valid
       core.io.memWrite.UnitMemWrite.weight_write.bits.writeData := io.mem.resp.bits.data_raw.asSInt // TODO: this probably only works for 32 bit
+      core.io.memWrite.UnitMemWrite.weight_write.bits.writeAddr := memory_read_counter
       core.io.memWrite.UnitAddr := mem_write_unit_addr
       core.io.memWrite.UnitMemWrite.weight_write.bits.writeSelect := mem_write_weight_sel
     }
@@ -477,8 +486,8 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
   io.mem.req.valid := mem_req_valid
   io.mem.req.bits.addr := current_memory_addr
   io.mem.req.bits.tag := 0.U
-  io.mem.req.bits.cmd := Mux(state === s_run, M_XWR, M_XRD)
-  io.mem.req.bits.size := log2Up(4).U // maybe already defined as default???
+  io.mem.req.bits.cmd := Mux((state===s_run || state===s_wait_result_write), M_XWR, M_XRD)
+  io.mem.req.bits.size := log2Up(config.wBytes).U // maybe already defined as default???
   io.mem.req.bits.signed := false.B
   io.mem.req.bits.data := Mux(writing_act, result_act_out, result_rev_act_out).asInstanceOf[Bits].asUInt
   io.mem.req.bits.phys := false.B

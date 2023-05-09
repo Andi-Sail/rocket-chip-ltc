@@ -98,8 +98,8 @@ class CloneTileConfig extends Config(new WithCloneRocketTiles(7) ++ new WithNBig
 
 // class LTCConfig64 extends Config(new WithNSmallCores(1) ++ new BaseFPGAConfig ++ new WithRoccExample)
 // class LTCConfig extends Config(new WithNSmallCores(1) ++ new WithRV32 ++ new BaseFPGAConfig ++ new WithRoccExample)
-// class LTCConfigFPU extends Config(new WithNSmallCores32FPU(1) ++ new BaseFPGAConfig ++ new WithRoccExample)
 
+class LTCConfigFPU extends Config(new WithNSmallCores32FPU(1) ++ new BaseFPGAConfig ++ new WithLTCRocc)
 class LTCConfig extends Config(new WithNSmallCores(1) ++ new WithRV32 ++ new BaseFPGAConfig ++ new WithLTCRocc)
 
 
