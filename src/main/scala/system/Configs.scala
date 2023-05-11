@@ -106,3 +106,4 @@ class LTCConfig extends Config(new WithNSmallCores(1) ++ new WithRV32 ++ new Bas
 class LTCConfigRBB extends Config(new WithJtagDTMSystem ++ new LTCConfig)
 
 // class LTCConfigFPURBB extends Config(new WithJtagDTMSystem ++ new LTCConfigFPU)
+class LTCConfigFPURBB extends Config(new WithJtagDTMSystem ++ new LTCConfig)

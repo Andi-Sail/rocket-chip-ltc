@@ -136,6 +136,7 @@ class MyAccumulatorExampleModuleImp(outer: MyAccumulatorExample)(implicit p: Par
 // Config Parameters (TODO: could be like Rocket-Config. Or this might be enough...)
 class LTCCoprocConfig(
   val w : Int = 32, val f : Int = 16,
+  // val w : Int = 16, val f : Int = 8,
   val maxNeurons: Int = 256, 
   val ramBlockArrdWidth : Int = 9,
   val hwMultWidth : Int = 18,
@@ -293,6 +294,7 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
     with HasCoreParameters {
   // adapt config for current core parameters
   config.xLen = xLen
+  println(s"using config w: ${config.w} - f: w: ${config.f}")
 
   dontTouch(io)    
   io <> DontCare
@@ -361,7 +363,7 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
   when (cmd.fire && (cmd.bits.inst.funct === LTCCoProc_FuncDef.load_state.U)) {
     state := s_load_state
     current_memory_addr := core.io.state_addr
-    final_load_addr := core.io.state_addr + ((core.io.n_neurons-1.U) << 2) 
+    final_load_addr := core.io.state_addr + ((core.io.n_neurons-1.U) << (log2Up(config.wBytes).U)) 
     mem_req_valid := true.B
     memory_read_counter := 0.U
   }
@@ -370,7 +372,7 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
   when (cmd.fire && (cmd.bits.inst.funct === LTCCoProc_FuncDef.load_sparcity.U)) {
     state := s_load_sparcity
     current_memory_addr := cmd.bits.rs2
-    final_load_addr :=  cmd.bits.rs2 + (((cmd.bits.rs1(config.xLen/2 -1,0))-1.U) << 2) 
+    final_load_addr :=  cmd.bits.rs2 + (((cmd.bits.rs1(config.xLen/2 -1,0))-1.U) << (log2Up(config.wBytes).U)) 
     mem_write_unit_addr := cmd.bits.rs1(3*config.xLen / 4 - 1, config.xLen /2)
     mem_req_valid := true.B
     memory_read_counter := 0.U
@@ -378,7 +380,7 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
   when (cmd.fire && (cmd.bits.inst.funct === LTCCoProc_FuncDef.load_weight.U)) {
     state := s_load_weight
     current_memory_addr := cmd.bits.rs2
-    final_load_addr :=  cmd.bits.rs2 + (((cmd.bits.rs1(config.xLen/2 -1,0))-1.U) << 2) 
+    final_load_addr :=  cmd.bits.rs2 + (((cmd.bits.rs1(config.xLen/2 -1,0))-1.U) << (log2Up(config.wBytes).U)) 
     mem_write_unit_addr := cmd.bits.rs1(3*config.xLen / 4 - 1, config.xLen /2)
     mem_write_weight_sel := LTCUnit_WeightSel(cmd.bits.rs1(3*config.xLen/4 + LTCUnit_WeightSel.getWidth -1, 3*config.xLen/4))
     mem_req_valid := true.B
@@ -414,8 +416,8 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
     writing_act := true.B
     result_act_out := core.io.data_out.bits.act
     result_rev_act_out := core.io.data_out.bits.rev_act
-    current_memory_addr := core.io.result_act_addr + (unit_out_cnt(core.io.chosen_out) << 2) // using unit cnt directly
-    act_rev_memory_addr := core.io.result_rev_act_addr + (unit_out_cnt(core.io.chosen_out) << 2) // using unit cnt directly
+    current_memory_addr := core.io.result_act_addr + (unit_out_cnt(core.io.chosen_out) << log2Up(config.wBytes).U) // using unit cnt directly
+    act_rev_memory_addr := core.io.result_rev_act_addr + (unit_out_cnt(core.io.chosen_out) << log2Up(config.wBytes).U) // using unit cnt directly
     unit_out_cnt(core.io.chosen_out) := unit_out_cnt(core.io.chosen_out) + 1.U
     mem_req_valid := true.B
   }
@@ -462,18 +464,18 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
   switch (state) {
     is (s_load_state) {
       core.io.memWrite.stateWrite.valid := io.mem.resp.valid
-      core.io.memWrite.stateWrite.bits.stateValue := io.mem.resp.bits.data_raw.asSInt // TODO: this probably only works for 32 bit
+      core.io.memWrite.stateWrite.bits.stateValue := io.mem.resp.bits.data.asSInt // TODO: this probably only works for 32 bit
       core.io.memWrite.stateWrite.bits.stateAddr := memory_read_counter
     } 
     is (s_load_sparcity) {
       core.io.memWrite.UnitMemWrite.sparcity_write.valid := io.mem.resp.valid
-      core.io.memWrite.UnitMemWrite.sparcity_write.bits.writeData := io.mem.resp.bits.data_raw(0) // TODO: this probably only works for 32 bit
+      core.io.memWrite.UnitMemWrite.sparcity_write.bits.writeData := io.mem.resp.bits.data(0) // TODO: this probably only works for 32 bit
       core.io.memWrite.UnitMemWrite.sparcity_write.bits.writeAddr := memory_read_counter
       core.io.memWrite.UnitAddr := mem_write_unit_addr
     }
     is (s_load_weight) {
       core.io.memWrite.UnitMemWrite.weight_write.valid := io.mem.resp.valid
-      core.io.memWrite.UnitMemWrite.weight_write.bits.writeData := io.mem.resp.bits.data_raw.asSInt // TODO: this probably only works for 32 bit
+      core.io.memWrite.UnitMemWrite.weight_write.bits.writeData := io.mem.resp.bits.data.asSInt // TODO: this probably only works for 32 bit
       core.io.memWrite.UnitMemWrite.weight_write.bits.writeAddr := memory_read_counter
       core.io.memWrite.UnitAddr := mem_write_unit_addr
       core.io.memWrite.UnitMemWrite.weight_write.bits.writeSelect := mem_write_weight_sel
@@ -481,15 +483,39 @@ class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: P
     is (s_run) {
     }
   }
-  
+
+  // Not needed --> size and appropriate shift of store data is enough  (left here for reference)
+  // def getMemoryMask(invert : Boolean = false) : UInt = {
+  //   var maskStr = "b"
+  //   for (i <- 0 until (config.xLen/8)) {
+  //     if (((config.xLen/8)-i) > (config.w/8) ) {
+  //       maskStr = maskStr + "0"
+  //     } else {
+  //       maskStr = maskStr + "1"
+  //     }
+  //   }
+  //   if (invert){ // kind of ugly, but at least we'll see what is done during elaburation
+  //     maskStr = maskStr.replace("0","x").replace("1","0").replace("x","1")
+  //   }
+  //   println(s"using memory mask with invert = $invert: " + maskStr)
+  //   val maskValue = maskStr.U
+  //   println(s"this is value $maskValue")
+
+  //   return maskValue
+  // }
+
   // MEMORY REQUEST INTERFACE
   io.mem.req.valid := mem_req_valid
   io.mem.req.bits.addr := current_memory_addr
   io.mem.req.bits.tag := 0.U
   io.mem.req.bits.cmd := Mux((state===s_run || state===s_wait_result_write), M_XWR, M_XRD)
-  io.mem.req.bits.size := log2Up(config.wBytes).U // maybe already defined as default???
-  io.mem.req.bits.signed := false.B
-  io.mem.req.bits.data := Mux(writing_act, result_act_out, result_rev_act_out).asInstanceOf[Bits].asUInt
+  // io.mem.req.bits.cmd := Mux((state===s_run || state===s_wait_result_write), M_PWR, M_XRD) // Not needed --> size and appropriate shift of store data is enough
+  io.mem.req.bits.size := log2Up(config.wBytes).U
+  io.mem.req.bits.signed := true.B
+  io.mem.req.bits.data := Mux(current_memory_addr(1) && (config.w < config.xLen).B, // shift if address is not xLen-bit aligend (write will only hapen xLen-bit aligned!) NOTE: only tested for 32 and 16 bit. Probalbly need adjustment for other number formats!
+                              (Mux(writing_act, result_act_out, result_rev_act_out).pad(io.mem.req.bits.data.getWidth).asInstanceOf[Bits].asUInt) << (config.xLen - config.w),
+                              Mux(writing_act, result_act_out, result_rev_act_out).pad(io.mem.req.bits.data.getWidth).asInstanceOf[Bits].asUInt)
+  // io.mem.req.bits.mask := Mux(current_memory_addr(1) && (config.w < config.xLen).B, getMemoryMask(true), getMemoryMask()) // Byte mask for relevant part of word (with length xLen) // Not needed --> size and appropriate shift of store data is enough
   io.mem.req.bits.phys := false.B
   io.mem.req.bits.dprv := cmd_dprv
   io.mem.req.bits.dv := cmd_dv

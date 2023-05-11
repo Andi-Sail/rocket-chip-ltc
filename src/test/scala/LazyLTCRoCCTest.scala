@@ -606,6 +606,33 @@ class CRS_Enum_test  extends AnyFlatSpec with ChiselScalatestTester {
   println(s"LTCCore_CSRs.getWidth = ${LTCCore_CSRs.getWidth}")
 }
 
+class MemoryMask_test  extends AnyFlatSpec with ChiselScalatestTester {
+  behavior of "LTCCoProc" 
+
+  var config = new LTCCoprocConfig(w=16, f=8)
+  def getMemoryMask() : UInt = {
+    var maskStr = "b"
+    for (i <- 0 until (config.xLen/8)) {
+      if (((config.xLen/8)-i) > (config.w/8) ) {
+        maskStr = maskStr + "0"
+      } else {
+        maskStr = maskStr + "1"
+      }
+    }
+    println("using memory mask: " + maskStr)
+    val maskValue = maskStr.U
+    println(s"this is value $maskValue")
+
+    return maskValue
+  }
+
+  assert(getMemoryMask().litValue == "b0011".U.litValue) 
+
+  config = new LTCCoprocConfig(w=32, f=16)
+
+  assert(getMemoryMask().litValue == "b1111".U.litValue) // 2**32-1
+}
+
 // class DummyAddrCalc(config : LTCCoprocConfig) extends Module {
 //   val io = IO(new Bundle{
 //     val valid = Input(Bool())
