@@ -6,6 +6,7 @@ package freechips.rocketchip.system
 import org.chipsalliance.cde.config.Config
 import freechips.rocketchip.subsystem._
 import freechips.rocketchip.subsystem
+import freechips.rocketchip.tile.LTCCoprocConfig
 
 class WithJtagDTMSystem extends freechips.rocketchip.subsystem.WithJtagDTM
 class WithDebugSBASystem extends freechips.rocketchip.subsystem.WithDebugSBA
@@ -99,11 +100,25 @@ class CloneTileConfig extends Config(new WithCloneRocketTiles(7) ++ new WithNBig
 // class LTCConfig64 extends Config(new WithNSmallCores(1) ++ new BaseFPGAConfig ++ new WithRoccExample)
 // class LTCConfig extends Config(new WithNSmallCores(1) ++ new WithRV32 ++ new BaseFPGAConfig ++ new WithRoccExample)
 
-class LTCConfigFPU extends Config(new WithNSmallCores32FPU(1) ++ new BaseFPGAConfig ++ new WithLTCRocc)
-class LTCConfig extends Config(new WithNSmallCores(1) ++ new WithRV32 ++ new BaseFPGAConfig ++ new WithLTCRocc)
+class LTCConfigFPU(
+  ltc_config : LTCCoprocConfig
+) extends Config(new WithNSmallCores32FPU(1) ++ new BaseFPGAConfig ++ new WithLTCRocc(ltc_config))
+class LTCConfig(
+  ltc_config : LTCCoprocConfig
+) extends Config(new WithNSmallCores(1) ++ new WithRV32 ++ new BaseFPGAConfig ++ new WithLTCRocc(ltc_config))
 
 
-class LTCConfigRBB extends Config(new WithJtagDTMSystem ++ new LTCConfig)
+class LTCConfigRBB extends Config(new WithJtagDTMSystem ++ new LTCConfig(new LTCCoprocConfig()))
 
-// class LTCConfigFPURBB extends Config(new WithJtagDTMSystem ++ new LTCConfigFPU)
-class LTCConfigFPURBB extends Config(new WithJtagDTMSystem ++ new LTCConfig)
+class LTCConfigFPURBB extends Config(new WithJtagDTMSystem ++ new LTCConfigFPU(new LTCCoprocConfig()))
+// class LTCConfigFPURBB extends Config(new WithJtagDTMSystem ++ new LTCConfig)
+
+
+// Configs for evaluation cases
+class LTCConfig_W32F16_small  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=32,f=16,N_Units=1)))
+class LTCConfig_W32F16_medium extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=32,f=16,N_Units=2)))
+class LTCConfig_W32F16_large  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=32,f=16,N_Units=4)))
+
+class LTCConfig_W16F8_small  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_Units=1)))
+class LTCConfig_W16F8_medium extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_Units=2)))
+class LTCConfig_W16F8_large  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_Units=4)))

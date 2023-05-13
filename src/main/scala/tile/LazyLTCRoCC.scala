@@ -141,7 +141,7 @@ class LTCCoprocConfig(
   val ramBlockArrdWidth : Int = 9,
   val hwMultWidth : Int = 18,
   val sigmoid_lut_addr_w : Int = 6, 
-  val N_Units : Int = 5,
+  val N_Units : Int = 4,
   val ltc_out_queue_size : Int = 10,
   // from core parameters
   var xLen : Int = 32,

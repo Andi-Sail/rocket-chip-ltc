@@ -392,10 +392,12 @@ class WithRoccExample extends Config((site, here, up) => {
     })
 })
 
-class WithLTCRocc  extends Config((site, here, up) => {
+class WithLTCRocc(
+    ltc_config : LTCCoprocConfig
+  )  extends Config((site, here, up) => {
   case BuildRoCC => List(
     (p: Parameters) => {
-        val ltcCoProc = LazyModule(new LTCCoProcRoCC(OpcodeSet.custom0, new LTCCoprocConfig())(p)) // TODO: do config 
+        val ltcCoProc = LazyModule(new LTCCoProcRoCC(OpcodeSet.custom0, ltc_config)(p)) // TODO: do config 
         ltcCoProc
     }
     ,
