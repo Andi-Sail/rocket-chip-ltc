@@ -5,7 +5,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.stage.PrintFullStackTraceAnnotation
 import org.scalatest.funsuite.AnyFunSuite
 
-import freechips.rocketchip.tile.{LTCUnit, HardSigmoid, LTCUnit_WeightSel, LTCCore}
+import freechips.rocketchip.tile.{LTCPE, HardSigmoid, LTCPE_WeightSel, LTCCore}
 import chisel3.experimental.FixedPoint
 
 import  Array._
@@ -21,7 +21,7 @@ import breeze.{numerics => bnumerics}
 import io.circe._
 import io.circe.parser._
 import freechips.rocketchip.tile.LTCCoprocConfig
-import freechips.rocketchip.tile.LTCUnit_CSRs
+import freechips.rocketchip.tile.LTCPE_CSRs
 import freechips.rocketchip.tile.LTCCore_CSRs
 
 
@@ -149,14 +149,14 @@ class SigmoidImplTest extends AnyFlatSpec with ChiselScalatestTester {
 }
 
 
-class LTCUnit_Latency_test extends AnyFlatSpec with ChiselScalatestTester {
+class LTCPE_Latency_test extends AnyFlatSpec with ChiselScalatestTester {
   
-  behavior of "LTCUnit"
+  behavior of "LTCPE"
   // test class body here
   for (w <- Seq(16,32))
   {
-    it should s"check the latency of the LTC Unit with w=$w" in {
-      test(new LTCUnit(new LTCCoprocConfig(w=w, f=w/2))).withAnnotations(Seq(PrintFullStackTraceAnnotation)) { c =>
+    it should s"check the latency of the LTC PE with w=$w" in {
+      test(new LTCPE(new LTCCoprocConfig(w=w, f=w/2))).withAnnotations(Seq(PrintFullStackTraceAnnotation)) { c =>
         val exp_mult_latency = if (w > 17) {4} else {1}
         val exp_latency = 1 + 8 + 2*exp_mult_latency + (exp_mult_latency-1)
         assert(c.LATENCY == exp_latency)
@@ -165,31 +165,31 @@ class LTCUnit_Latency_test extends AnyFlatSpec with ChiselScalatestTester {
   }
 }
 
-class LTCUnit_Datapath_test extends AnyFlatSpec with ChiselScalatestTester {
+class LTCPE_Datapath_test extends AnyFlatSpec with ChiselScalatestTester {
   
-  behavior of "LTCUnit"
+  behavior of "LTCPE"
   // test class body here
   it should "activate done according N_out_neurons " in {
     val N_out_neurons_test = 12
-    test(new LTCUnit(new LTCCoprocConfig())).withAnnotations(Seq(WriteVcdAnnotation)) { c =>
+    test(new LTCPE(new LTCCoprocConfig())).withAnnotations(Seq(WriteVcdAnnotation)) { c =>
       c.clock.step() // step reset
-      c.io.en.poke(false.B) // disable LTC Unit
+      c.io.en.poke(false.B) // disable LTC PE
       c.io.j.poke(0.U)
       
       // write some value to N_out_neurons_write
       c.io.csr.csrWrite.bits.poke(N_out_neurons_test.U)
       c.io.csr.csrWrite.valid.poke(true.B)
       c.io.csr.csrSel.valid.poke(true.B)
-      c.io.csr.csrSel.bits.poke(LTCUnit_CSRs.n_out_neurons)
+      c.io.csr.csrSel.bits.poke(LTCPE_CSRs.n_out_neurons)
       
       c.clock.step()
       c.io.en.poke(true.B)
-      c.io.unit_out.ready.poke(true) // we do not really care about data out here anyway
+      c.io.pe_out.ready.poke(true) // we do not really care about data out here anyway
 
       c.io.csr.csrWrite.bits.poke(42.U)
       c.io.csr.csrWrite.valid.poke(false.B)
       c.io.csr.csrSel.valid.poke(true.B)
-      c.io.csr.csrSel.bits.poke(LTCUnit_CSRs.n_out_neurons)
+      c.io.csr.csrSel.bits.poke(LTCPE_CSRs.n_out_neurons)
       // check done is low
       c.io.done.expect(false.B, s"done is set before anything happens")
       
@@ -219,16 +219,16 @@ class LTCUnit_Datapath_test extends AnyFlatSpec with ChiselScalatestTester {
   }
 }
 
-class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
+class LTCPE_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
   
-  behavior of "LTCUnit"
+  behavior of "LTCPE"
   it should "write some weights to memory and run inference" in {
     val N_neurons = 12
-    test(new LTCUnit(new LTCCoprocConfig())).withAnnotations(Seq(
+    test(new LTCPE(new LTCCoprocConfig())).withAnnotations(Seq(
       WriteVcdAnnotation,
       PrintFullStackTraceAnnotation)) { c =>
       c.clock.step() // step reset
-      c.io.en.poke(false.B) // disable LTC Unit
+      c.io.en.poke(false.B) // disable LTC PE
       c.io.j.poke(0.U)
       c.io.k.poke(0.U)
       c.clock.step()
@@ -237,11 +237,11 @@ class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
       c.io.csr.csrWrite.bits.poke(N_neurons)
       c.io.csr.csrWrite.valid.poke(true)
       c.io.csr.csrSel.valid.poke(true.B)
-      c.io.csr.csrSel.bits.poke(LTCUnit_CSRs.n_out_neurons)
+      c.io.csr.csrSel.bits.poke(LTCPE_CSRs.n_out_neurons)
       c.clock.step()
       c.io.csr.csrWrite.valid.poke(false)
       c.io.csr.csrSel.valid.poke(true.B)
-      c.io.csr.csrSel.bits.poke(LTCUnit_CSRs.n_out_neurons)
+      c.io.csr.csrSel.bits.poke(LTCPE_CSRs.n_out_neurons)
       c.clock.step()
 
       // write sparcity
@@ -265,7 +265,7 @@ class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
       c.clock.step()
 
       c.io.memWrite.weight_write.valid.poke(true)
-      LTCUnit_WeightSel.all.foreach{ m =>
+      LTCPE_WeightSel.all.foreach{ m =>
         println(s"writing something to $m")
         c.io.memWrite.weight_write.bits.writeSelect.poke(m)
         for (i <- 0 until (N_neurons*N_neurons / 2)) // only half of the weights since half of the synapses are inactive
@@ -277,10 +277,10 @@ class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
       }
       c.io.memWrite.weight_write.valid.poke(false)
 
-      // activate unit and feed some states
+      // activate pe and feed some states
       c.io.en.poke(true)
       c.clock.step(scala.util.Random.between(1,50))
-      c.io.unit_out.ready.poke(true) // we do not really care about data out here anyway
+      c.io.pe_out.ready.poke(true) // we do not really care about data out here anyway
       c.io.fire.poke(true)
       var k = 0
       for (j <- 0 until N_neurons)
@@ -318,13 +318,13 @@ class LTCUnit_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
 }
 
 
-class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
-  behavior of "LTCUnit"
+class LTCPE_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
+  behavior of "LTCPE"
 
   
   // emit Verilog for test synthesis (this is independent of the tests below)
   val verilog_config = new LTCCoprocConfig(w=32, f=16)
-  (new chisel3.stage.ChiselStage).emitVerilog(new LTCUnit(verilog_config))
+  (new chisel3.stage.ChiselStage).emitVerilog(new LTCPE(verilog_config))
 
   var dummy_counter_state = false
 
@@ -346,23 +346,23 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
     }
 
     // load model definition and weights
-    val (units, ode_synapses, weigth_map, sparcity_matrix) = LTCTestDataUtil.ReadLTCModelFromHeader(header_file, F)
+    val (pes, ode_synapses, weigth_map, sparcity_matrix) = LTCTestDataUtil.ReadLTCModelFromHeader(header_file, F)
 
     // load rocc input and output values from json
     val ltc_rocc_values = LTCTestDataUtil.LoadLTCRoCCStimuli(json_file)
     
     it should s"run sandbox ${fc_str}model with fix$F" in {
-      test(new LTCUnit(config)).withAnnotations(Seq(
+      test(new LTCPE(config)).withAnnotations(Seq(
         WriteVcdAnnotation,
         PrintFullStackTraceAnnotation)) { c =>
         c.clock.step() // step reset
-        c.io.en.poke(false.B) // disable LTC Unit
+        c.io.en.poke(false.B) // disable LTC PE
         c.io.j.poke(0.U)
         c.io.k.poke(0.U)
         c.clock.step()
 
-        val written_synapses = LTCTestUtil.WriteModelData2Unit(c.io.csr, c.io.memWrite, c.clock, config,
-          units, units, weigth_map, sparcity_matrix)
+        val written_synapses = LTCTestUtil.WriteModelData2PE(c.io.csr, c.io.memWrite, c.clock, config,
+          pes, pes, weigth_map, sparcity_matrix)
         assert(written_synapses == ode_synapses, "Not all synapses written")
 
         for (test_run <- 0 until ltc_rocc_values.size)
@@ -372,7 +372,7 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
           val rev_activation = ltc_rocc_values(test_run)("rev_activation")
           val activation = ltc_rocc_values(test_run)("activation")
 
-          // activate unit and feed some states
+          // activate pe and feed some states
           c.io.en.poke(true)
           c.clock.step(scala.util.Random.between(1,50))
           // c.clock.step(scala.util.Random.between(1,20))
@@ -385,10 +385,10 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
           // feed input
           fork {
             var k = 0
-            for (j <- 0 until units)
+            for (j <- 0 until pes)
             {
               c.io.j.poke(j)
-              for (i <- 0 until units)
+              for (i <- 0 until pes)
               {
                 c.io.k.poke(k)
                 if (i > 0) {
@@ -400,7 +400,7 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
                 }
 
                 fork {timescope{
-                  c.io.last_state.poke(i === (units-1))
+                  c.io.last_state.poke(i === (pes-1))
                   c.clock.step()
                 }}
       
@@ -410,23 +410,23 @@ class LTCUnit_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
                 k += 1
               }
               if (dummy_counter_state) {
-                c.io.x_z1.poke(FixedPoint((units), W.W, F.BP))
+                c.io.x_z1.poke(FixedPoint((pes), W.W, F.BP))
               } else {
-                c.io.x_z1.poke(FixedPoint(states(units-1), W.W, F.BP))
+                c.io.x_z1.poke(FixedPoint(states(pes-1), W.W, F.BP))
               }
             }
             c.clock.step()
           } 
 
-          c.io.unit_out.ready.poke(true) // Note: this test is always ready to recieve data
-          for (out_cnt <- 0 until units)
+          c.io.pe_out.ready.poke(true) // Note: this test is always ready to recieve data
+          for (out_cnt <- 0 until pes)
           {
-            while (!c.io.unit_out.valid.peekBoolean())
+            while (!c.io.pe_out.valid.peekBoolean())
             {
               c.clock.step()
             }
-            c.io.unit_out.bits.act.expect(FixedPoint(activation(out_cnt), W.W, F.BP), s"act missmatch for neuron $out_cnt in test run $test_run")
-            c.io.unit_out.bits.rev_act.expect(FixedPoint(rev_activation(out_cnt), W.W, F.BP), s"rev_act missmatch for neuron $out_cnt in test run $test_run")
+            c.io.pe_out.bits.act.expect(FixedPoint(activation(out_cnt), W.W, F.BP), s"act missmatch for neuron $out_cnt in test run $test_run")
+            c.io.pe_out.bits.rev_act.expect(FixedPoint(rev_activation(out_cnt), W.W, F.BP), s"rev_act missmatch for neuron $out_cnt in test run $test_run")
             c.clock.step()
           }
           
@@ -455,14 +455,14 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
   for {
     W <- Array(16,32)
     useFC <- Array(true, false)
-    n_units <- Array(1,4,5)
+    n_pes <- Array(1,4,5)
     // W <- Array(16)
     // useFC <- Array(true)
-    // n_units <- Array(1)
+    // n_pes <- Array(1)
   }
   {
     val F = W / 2
-    val config = new LTCCoprocConfig(w=W, f=F, N_Units=n_units)
+    val config = new LTCCoprocConfig(w=W, f=F, N_PEs=n_pes)
 
     var header_file = "testdata/sandbox_ltc.h"
     var json_file = s"testdata/sandbox_fix${F}_rocc.json"
@@ -475,13 +475,13 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
 
 
     // load model definition and weights
-    val (units, ode_synapses, weigth_map, sparcity_matrix) = LTCTestDataUtil.ReadLTCModelFromHeader(header_file, F)
+    val (pes, ode_synapses, weigth_map, sparcity_matrix) = LTCTestDataUtil.ReadLTCModelFromHeader(header_file, F)
 
     // load rocc input and output values from json
     val ltc_rocc_values = LTCTestDataUtil.LoadLTCRoCCStimuli(json_file)
     
 
-    it should s"run ltc core with $fc_str sandbox in fix${F} with $n_units units" in {
+    it should s"run ltc core with $fc_str sandbox in fix${F} with $n_pes pes" in {
       test(new LTCCore(config)).withAnnotations(Seq(
       WriteVcdAnnotation,
       PrintFullStackTraceAnnotation)) { c =>
@@ -490,21 +490,21 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
 
         // write Model config
         timescope {
-          c.io.csr.csrWrite.bits.poke(scala.math.ceil(units.toDouble / config.N_Units).toInt) 
+          c.io.csr.csrWrite.bits.poke(scala.math.ceil(pes.toDouble / config.N_PEs).toInt) 
           c.io.csr.csrWrite.valid.poke(true)
           c.io.csr.csrSel.bits.poke(LTCCore_CSRs.max_out_neurons)
           c.io.csr.csrSel.valid.poke(true)
           c.clock.step()
         }
         timescope {
-          c.io.csr.csrWrite.bits.poke((pow(units,2) / config.N_Units).toInt)
+          c.io.csr.csrWrite.bits.poke((pow(pes,2) / config.N_PEs).toInt)
           c.io.csr.csrWrite.valid.poke(true)
           c.io.csr.csrSel.bits.poke(LTCCore_CSRs.max_synapses)
           c.io.csr.csrSel.valid.poke(true)
           c.clock.step()
         }
         timescope {
-          c.io.csr.csrWrite.bits.poke(units)
+          c.io.csr.csrWrite.bits.poke(pes)
           c.io.csr.csrWrite.valid.poke(true)
           c.io.csr.csrSel.bits.poke(LTCCore_CSRs.n_neurons)
           c.io.csr.csrSel.valid.poke(true)
@@ -513,28 +513,28 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
 
         var written_synapses = 0
         var written_neurons = 0
-        val neurons_per_unit = blinag.DenseVector(Array.fill(config.N_Units)(units / config.N_Units))
-        while (blinag.sum(neurons_per_unit) < units) {
-          // find argmin of neurons_per_unit
-          val i = blinag.argmin(neurons_per_unit)
+        val neurons_per_pe = blinag.DenseVector(Array.fill(config.N_PEs)(pes / config.N_PEs))
+        while (blinag.sum(neurons_per_pe) < pes) {
+          // find argmin of neurons_per_pe
+          val i = blinag.argmin(neurons_per_pe)
           // add one
-          neurons_per_unit(i) += 1
+          neurons_per_pe(i) += 1
         }
-        println("Using the following partitioning for the units")
-        println(neurons_per_unit)
-        for (i <- 0 until config.N_Units) {
-          c.io.memWrite.UnitAddr.poke(i)
-          c.io.csr.UnitAddr.poke(i)
-          written_synapses += LTCTestUtil.WriteModelData2Unit(c.io.csr.UnitCSR, c.io.memWrite.UnitMemWrite, c.clock, config, 
-            units, neurons_per_unit(i), 
+        println("Using the following partitioning for the pes")
+        println(neurons_per_pe)
+        for (i <- 0 until config.N_PEs) {
+          c.io.memWrite.PEAddr.poke(i)
+          c.io.csr.PEAddr.poke(i)
+          written_synapses += LTCTestUtil.WriteModelData2PE(c.io.csr.PECSR, c.io.memWrite.PEMemWrite, c.clock, config, 
+            pes, neurons_per_pe(i), 
             weigth_map.view.mapValues(l => l.slice(written_synapses, l.length)).toMap,
-            sparcity_matrix.map(_.slice(written_neurons, written_neurons+neurons_per_unit(i))))
-          written_neurons += neurons_per_unit(i)
+            sparcity_matrix.map(_.slice(written_neurons, written_neurons+neurons_per_pe(i))))
+          written_neurons += neurons_per_pe(i)
           c.clock.step()
           println(s"now written $written_synapses synapses")
         }
         assert(written_synapses == ode_synapses, "Not all synapses written")
-        assert(written_neurons  == units, "Not all neurons written")
+        assert(written_neurons  == pes, "Not all neurons written")
 
         println(s"written $written_synapses synapses")
         println(s"written $written_neurons neurons")
@@ -559,20 +559,20 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
 
           fork{
             var outputs_checked = 0
-            val outputs_checked_of_unit = Array.fill(config.N_Units) {0}
-            while (outputs_checked < units) {
+            val outputs_checked_of_pe = Array.fill(config.N_PEs) {0}
+            while (outputs_checked < pes) {
               c.io.data_out.ready.poke(false) // simulate memory busy for some random time
               c.clock.step(scala.util.Random.between(0,10))
               c.io.data_out.ready.poke(true) 
               while (!c.io.data_out.valid.peekBoolean()) {
                 c.clock.step()
               }
-              val unit_n = c.io.chosen_out.peekInt().toInt
-              var neuron_n = outputs_checked_of_unit(unit_n)
-              if (unit_n > 0) { neuron_n += blinag.sum(neurons_per_unit.slice(0,unit_n)) }
-              c.io.data_out.bits.act.expect(FixedPoint(activation(neuron_n), W.W, F.BP), s"act missmatch for neuron $neuron_n from unit $unit_n in test run $test_run")
-              c.io.data_out.bits.rev_act.expect(FixedPoint(rev_activation(neuron_n), W.W, F.BP), s"rev act missmatch for neuron $neuron_n from unit $unit_n in test run $test_run")
-              outputs_checked_of_unit(unit_n) +=1
+              val pe_n = c.io.chosen_out.peekInt().toInt
+              var neuron_n = outputs_checked_of_pe(pe_n)
+              if (pe_n > 0) { neuron_n += blinag.sum(neurons_per_pe.slice(0,pe_n)) }
+              c.io.data_out.bits.act.expect(FixedPoint(activation(neuron_n), W.W, F.BP), s"act missmatch for neuron $neuron_n from pe $pe_n in test run $test_run")
+              c.io.data_out.bits.rev_act.expect(FixedPoint(rev_activation(neuron_n), W.W, F.BP), s"rev act missmatch for neuron $neuron_n from pe $pe_n in test run $test_run")
+              outputs_checked_of_pe(pe_n) +=1
               outputs_checked += 1
               c.clock.step()
             }
