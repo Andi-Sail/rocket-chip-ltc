@@ -123,10 +123,10 @@ class LTCConfig_W16F8_small  extends Config(new LTCConfigFPU(new LTCCoprocConfig
 class LTCConfig_W16F8_medium extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_Units=2)))
 class LTCConfig_W16F8_large  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_Units=4)))
 
-class LTCConfig_LargeMem_W32F16_small  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=32,f=16,N_Units=1, ramBlockArrdWidth=13)))
-class LTCConfig_LargeMem_W32F16_medium extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=32,f=16,N_Units=2, ramBlockArrdWidth=13)))
-class LTCConfig_LargeMem_W32F16_large  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=32,f=16,N_Units=4, ramBlockArrdWidth=13)))
+class LTCConfig_LargeMem_W32F16_small  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=32,f=16,N_Units=1, ramBlockArrdWidth=14)))
+class LTCConfig_LargeMem_W32F16_medium extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=32,f=16,N_Units=2, ramBlockArrdWidth=14)))
+class LTCConfig_LargeMem_W32F16_large  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=32,f=16,N_Units=4, ramBlockArrdWidth=14)))
 
-class LTCConfig_LargeMem_W16F8_small  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_Units=1, ramBlockArrdWidth=13)))
-class LTCConfig_LargeMem_W16F8_medium extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_Units=2, ramBlockArrdWidth=13)))
-class LTCConfig_LargeMem_W16F8_large  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_Units=4, ramBlockArrdWidth=13)))
+class LTCConfig_LargeMem_W16F8_small  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_Units=1, ramBlockArrdWidth=14)))
+class LTCConfig_LargeMem_W16F8_medium extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_Units=2, ramBlockArrdWidth=14)))
+class LTCConfig_LargeMem_W16F8_large  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_Units=4, ramBlockArrdWidth=14)))

@@ -160,7 +160,7 @@ class WithNSmallCores(
       btb = None,
       dcache = Some(DCacheParams(
         rowBits = site(SystemBusKey).beatBits,
-        nSets = 64,
+        nSets = 64*2,
         nWays = 1,
         nTLBSets = 1,
         nTLBWays = 4,
@@ -168,7 +168,7 @@ class WithNSmallCores(
         blockBytes = site(CacheBlockBytes))),
       icache = Some(ICacheParams(
         rowBits = site(SystemBusKey).beatBits,
-        nSets = 64,
+        nSets = 64*2,
         nWays = 1,
         nTLBSets = 1,
         nTLBWays = 4,
