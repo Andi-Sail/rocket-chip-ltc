@@ -130,3 +130,4 @@ class LTCConfig_LargeMem_W32F16_large  extends Config(new LTCConfigFPU(new LTCCo
 class LTCConfig_LargeMem_W16F8_small  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_PEs=1, ramBlockArrdWidth=14)))
 class LTCConfig_LargeMem_W16F8_medium extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_PEs=2, ramBlockArrdWidth=14)))
 class LTCConfig_LargeMem_W16F8_large  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_PEs=4, ramBlockArrdWidth=14)))
+class LTCConfig_LargeMem_W16F8_huge  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_PEs=16, ramBlockArrdWidth=14)))

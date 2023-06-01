@@ -287,14 +287,14 @@ object LTCCoProc_FuncDef {
 
 // --- components --- (top down)
 class LTCCoProcRoCC(opcodes: OpcodeSet, config : LTCCoprocConfig)(implicit p: Parameters) extends LazyRoCC(opcodes) {
-  override lazy val module = new LTCCoProcImp(this, config : LTCCoprocConfig)
+  override lazy val module = new LTCCoProc(this, config : LTCCoprocConfig)
 }
 
-class LTCCoProcImp(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: Parameters) extends LazyRoCCModuleImp(outer)
+class LTCCoProc(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: Parameters) extends LazyRoCCModuleImp(outer)
     with HasCoreParameters {
   // adapt config for current core parameters
   config.xLen = xLen
-  println(s"using config w: ${config.w} - f: w: ${config.f}")
+  println(s"using config w: ${config.w} - f: ${config.f}")
 
   io <> DontCare
 
@@ -532,7 +532,7 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
       val result_act_addr = Output(UInt(config.xLen.W))
       val result_rev_act_addr = Output(UInt(config.xLen.W))
       val data_out = Decoupled(new LTCPE_DataOut(config))
-      val chosen_out = Output(UInt(config.xLen.W)) // still required for unit Test - USE ADDR OTHERWISE!!!
+      val chosen_out = Output(UInt(config.xLen.W)) 
 
       val csr = new LTCCore_CSRs_IO(config)
 
