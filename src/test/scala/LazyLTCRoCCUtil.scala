@@ -31,7 +31,7 @@ object LTCTestDataUtil {
     (Int, Int, Map[LTCPE_WeightSel.Type, List[Int]], Array[List[Int]]) = {
     // load model definition from C-header file ("if it works it ain't stupit 🙃" - ChatGPT (probably))
     val cHeaderString: String = scala.io.Source.fromFile(headerFilePaht).mkString
-    val pes = """(\d+)""".r.findFirstIn("""#define pes (\d+)""".r.findFirstIn(cHeaderString).get).get.toInt
+    val units = """(\d+)""".r.findFirstIn("""#define units (\d+)""".r.findFirstIn(cHeaderString).get).get.toInt
     val ode_synapses = """(\d+)""".r.findFirstIn("""#define ode_synapses (\d+)""".r.findFirstIn(cHeaderString).get).get.toInt
     val rnn_ltc_cell_sigma_0_sparse = s"fix${F}_t rnn_ltc_cell_sigma_0_sparse\\[${ode_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
     val rnn_ltc_cell_mu_0_sparse    = s"fix${F}_t rnn_ltc_cell_mu_0_sparse\\[${ode_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
@@ -44,11 +44,11 @@ object LTCTestDataUtil {
       LTCPE_WeightSel.erev  -> rnn_ltc_cell_erev_0_sparse,
     )
     // NOTE: sparcity_matrix is not transposed!!!!
-    val sparcity_matrix = s"int adjacency_matrix\\[${pes}\\]\\[${pes}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString)
+    val sparcity_matrix = s"int adjacency_matrix\\[${units}\\]\\[${units}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString)
     .map{m => m.group(1)}.get.split("""\},\{""")
     .map{s => s.replace("""{""", "").replace("""}""", "").split(',').map(x => abs(x.trim.toInt)).toList}
 
-    return (pes, ode_synapses, weigth_map, sparcity_matrix)
+    return (units, ode_synapses, weigth_map, sparcity_matrix)
   }
 
   /**

@@ -110,8 +110,8 @@ class LTCConfig(
 
 class LTCConfigRBB extends Config(new WithJtagDTMSystem ++ new LTCConfig(new LTCCoprocConfig()))
 
-class LTCConfigFPURBB extends Config(new WithJtagDTMSystem ++ new LTCConfigFPU(new LTCCoprocConfig()))
-// class LTCConfigFPURBB extends Config(new WithJtagDTMSystem ++ new LTCConfig)
+// class LTCConfigFPURBB extends Config(new WithJtagDTMSystem ++ new LTCConfigFPU(new LTCCoprocConfig()))
+class LTCConfigFPURBB extends Config(new WithJtagDTMSystem ++ new LTCConfig(new LTCCoprocConfig(w=32,f=16)))
 
 
 // Configs for evaluation cases
@@ -126,8 +126,10 @@ class LTCConfig_W16F8_large  extends Config(new LTCConfigFPU(new LTCCoprocConfig
 class LTCConfig_LargeMem_W32F16_small  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=32,f=16,N_PEs=1, ramBlockArrdWidth=14)))
 class LTCConfig_LargeMem_W32F16_medium extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=32,f=16,N_PEs=2, ramBlockArrdWidth=14)))
 class LTCConfig_LargeMem_W32F16_large  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=32,f=16,N_PEs=4, ramBlockArrdWidth=14)))
+class LTCConfig_LargeMem_W32F16_huge  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=32,f=16,N_PEs=16, ramBlockArrdWidth=14)))
 
 class LTCConfig_LargeMem_W16F8_small  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_PEs=1, ramBlockArrdWidth=14)))
 class LTCConfig_LargeMem_W16F8_medium extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_PEs=2, ramBlockArrdWidth=14)))
 class LTCConfig_LargeMem_W16F8_large  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_PEs=4, ramBlockArrdWidth=14)))
 class LTCConfig_LargeMem_W16F8_huge  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_PEs=16, ramBlockArrdWidth=14)))
+
