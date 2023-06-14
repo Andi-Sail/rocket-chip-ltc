@@ -681,3 +681,34 @@ class MemoryMask_test  extends AnyFlatSpec with ChiselScalatestTester {
 //     }
 //   }
 // }
+
+// Generalized FIR filter parameterized by the convolution coefficients
+class FirFilter(bitWidth: Int, coeffs: Seq[UInt]) extends Module {
+  val io = IO(new Bundle {
+    val in = Input(UInt(bitWidth.W))
+    val out = Output(UInt(bitWidth.W))
+  })
+  // Create the serial-in, parallel-out shift register
+  val zs = Reg(Vec(coeffs.length, UInt(bitWidth.W)))
+  zs(0) := io.in
+  for (i <- 1 until coeffs.length) {
+    zs(i) := zs(i-1)
+  }
+
+  // Do the multiplies
+  val products = VecInit.tabulate(coeffs.length)(i => zs(i) * coeffs(i))
+
+  // Sum up the products
+  io.out := products.reduce(_ + _)
+}
+
+class Export_test  extends AnyFlatSpec with ChiselScalatestTester {
+  behavior of "nothing" 
+
+  // val movingSum3Filter = Module(new FirFilter(8, Seq(1.U, 1.U, 1.U)))  // same 3-point moving sum filter as before
+  // val delayFilter = Module(new FirFilter(8, Seq(0.U, 1.U)))  // 1-cycle delay as a FIR filter
+  // val triangleFilter = Module(new FirFilter(8, Seq(1.U, 2.U, 3.U, 2.U, 1.U)))  // 5-point FIR filter with a triangle impulse response
+
+  (new chisel3.stage.ChiselStage).emitVerilog(new FirFilter(8, Seq(1.U, 2.U, 3.U, 2.U, 1.U)), Array("-disable-all-randomization", "-strip-debug-info"))
+  (new chisel3.stage.ChiselStage).emitFirrtl(new FirFilter(8, Seq(1.U, 2.U, 3.U, 2.U, 1.U)), Array("-disable-all-randomization", "-strip-debug-info"))
+}

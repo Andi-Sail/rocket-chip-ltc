@@ -111,7 +111,7 @@ class LTCConfig(
 class LTCConfigRBB extends Config(new WithJtagDTMSystem ++ new LTCConfig(new LTCCoprocConfig()))
 
 // class LTCConfigFPURBB extends Config(new WithJtagDTMSystem ++ new LTCConfigFPU(new LTCCoprocConfig()))
-class LTCConfigFPURBB extends Config(new WithJtagDTMSystem ++ new LTCConfig(new LTCCoprocConfig(w=32,f=16)))
+class LTCConfigFPURBB extends Config(new WithJtagDTMSystem ++ new LTCConfig(new LTCCoprocConfig(w=16,f=8)))
 
 
 // Configs for evaluation cases
