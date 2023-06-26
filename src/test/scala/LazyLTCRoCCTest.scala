@@ -702,6 +702,19 @@ class FirFilter(bitWidth: Int, coeffs: Seq[UInt]) extends Module {
   io.out := products.reduce(_ + _)
 }
 
+// 3-point moving sum implemented in the style of a FIR filter
+class MovingSum3(bitWidth: Int) extends Module {
+  val io = IO(new Bundle {
+    val in = Input(UInt(bitWidth.W))
+    val out = Output(UInt(bitWidth.W))
+  })
+
+  val z1 = RegNext(io.in)
+  val z2 = RegNext(z1)
+
+  io.out := (io.in * 1.U) + (z1 * 1.U) + (z2 * 1.U)
+}
+
 class Export_test  extends AnyFlatSpec with ChiselScalatestTester {
   behavior of "nothing" 
 
@@ -709,6 +722,14 @@ class Export_test  extends AnyFlatSpec with ChiselScalatestTester {
   // val delayFilter = Module(new FirFilter(8, Seq(0.U, 1.U)))  // 1-cycle delay as a FIR filter
   // val triangleFilter = Module(new FirFilter(8, Seq(1.U, 2.U, 3.U, 2.U, 1.U)))  // 5-point FIR filter with a triangle impulse response
 
-  (new chisel3.stage.ChiselStage).emitVerilog(new FirFilter(8, Seq(1.U, 2.U, 3.U, 2.U, 1.U)), Array("-disable-all-randomization", "-strip-debug-info"))
-  (new chisel3.stage.ChiselStage).emitFirrtl(new FirFilter(8, Seq(1.U, 2.U, 3.U, 2.U, 1.U)), Array("-disable-all-randomization", "-strip-debug-info"))
+  // (new chisel3.stage.ChiselStage).emitVerilog(new FirFilter(8, Seq(1.U, 2.U, 3.U, 2.U, 1.U)), Array("-disable-all-randomization", "-strip-debug-info"))
+  // (new chisel3.stage.ChiselStage).emitFirrtl(new FirFilter(8, Seq(1.U, 2.U, 3.U, 2.U, 1.U)), Array("-disable-all-randomization", "-strip-debug-info"))
+
+  val verilog_config = new LTCCoprocConfig(w=16, f=8)
+  (new chisel3.stage.ChiselStage).emitVerilog(new LTCCore(verilog_config))
+  
+  (new chisel3.stage.ChiselStage).emitVerilog(new MovingSum3(8))
+  (new chisel3.stage.ChiselStage).emitFirrtl(new MovingSum3(8))
+  (new chisel3.stage.ChiselStage).emitChirrtl(new MovingSum3(8))
+  (new chisel3.stage.ChiselStage).emitSystemVerilog(new MovingSum3(8))
 }

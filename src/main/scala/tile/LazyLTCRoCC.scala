@@ -701,7 +701,7 @@ class LTCPE(  val config  : LTCCoprocConfig, val peID : Int = -1
   val sigmoid = Module(new HardSigmoid(config))
 
   // constants
-  val MULT_LATENCY = if (config.w > 17) {4} else {1}
+  val MULT_LATENCY = if (config.w > config.hwMultWidth) {4} else {1}
   println(s"Mult lantency is: $MULT_LATENCY")
   val LATENCY = sigmoid.LATENCY + 7 + 2*MULT_LATENCY + (MULT_LATENCY-1) // Latency input to output
   val THROUGHPUT = 1 // 1 synapse per cc
