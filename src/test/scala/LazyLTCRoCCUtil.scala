@@ -44,7 +44,7 @@ object LTCTestDataUtil {
       LTCPE_WeightSel.erev  -> rnn_ltc_cell_erev_0_sparse,
     )
     // NOTE: sparcity_matrix is not transposed!!!!
-    val sparcity_matrix = s"int adjacency_matrix\\[${units}\\]\\[${units}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString)
+    val sparcity_matrix = s"adjacency_matrix\\[${units}\\]\\[${units}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString)
     .map{m => m.group(1)}.get.split("""\},\{""")
     .map{s => s.replace("""{""", "").replace("""}""", "").split(',').map(x => abs(x.trim.toInt)).toList}
 

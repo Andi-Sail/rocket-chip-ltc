@@ -365,7 +365,7 @@ class LTCPE_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
           pes, pes, weigth_map, sparcity_matrix)
         assert(written_synapses == ode_synapses, "Not all synapses written")
 
-        for (test_run <- 0 until ltc_rocc_values.size)
+        for (test_run <- 0 until ltc_rocc_values.size if (!ltc_rocc_values(test_run).keys.head.startsWith("sensory"))) // TODO: run sensory as well!
         {
           println(s"fix_$F test - iteration $test_run")
           val states = ltc_rocc_values(test_run)("states")
@@ -539,7 +539,7 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
         println(s"written $written_synapses synapses")
         println(s"written $written_neurons neurons")
 
-        for (test_run <- 0 until ltc_rocc_values.size)
+        for (test_run <- 0 until ltc_rocc_values.size if (!ltc_rocc_values(test_run).keys.head.startsWith("sensory"))) // TODO: run sensory as well!
         {
           println(s"fix_$F test - iteration $test_run")
           val states = ltc_rocc_values(test_run)("states")

@@ -773,7 +773,7 @@ class LTCPE(  val config  : LTCCoprocConfig, val peID : Int = -1
   }
 
   // weigth address propagaion
-  val mu_addr    = RegNext(active_synaps_counter)
+  val mu_addr    = RegNext(active_synaps_counter) // TODO + sensory_weight_offset if sensory
   val gamma_addr = RegNext(mu_addr)
   val w_addr     = ShiftRegister(gamma_addr, 1+MULT_LATENCY+sigmoid.LATENCY)
   val Erev_addr  = ShiftRegister(w_addr, 1+(MULT_LATENCY-1))
