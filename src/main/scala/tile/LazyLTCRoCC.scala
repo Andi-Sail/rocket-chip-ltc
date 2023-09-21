@@ -203,7 +203,8 @@ class LTCCore_MemoryWriteIF(val config : LTCCoprocConfig) extends Bundle {
 }
 
 object LTCPE_CSRs extends ChiselEnum {
-  val n_out_neurons, missed_out_values, result_act_addr, result_rev_act_addr = Value
+  val n_out_neurons, missed_out_values, result_act_addr, result_rev_act_addr,
+      sensory_n_out_neurons, sensory_weight_offset, sensory_sparcity_offset, sensory_result_act_addr, sensory_result_rev_act_addr = Value
   val readOnlyCSRs = List(
     missed_out_values
   )
@@ -216,7 +217,8 @@ object LTCPE_CSRs extends ChiselEnum {
 }
 
 object LTCCore_CSRs extends ChiselEnum {
-  val n_neurons, max_synapses, max_out_neurons, state_addr, n_pes, enable = Value
+  val n_neurons, max_synapses, max_out_neurons, state_addr, n_pes, enable,
+      sensory_n_neurons, sensory_state_addr, sensory_select = Value
   val readOnlyCSRs = List(
     n_pes
     // TODO: maybe add other interesting config params
@@ -568,8 +570,20 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
   }
   // constant registers
   csrs(LTCCore_CSRs.n_pes) := config.N_PEs.U
-  io.state_addr := csrs(LTCCore_CSRs.state_addr)
-  io.n_neurons := csrs(LTCCore_CSRs.n_neurons)
+
+  // sensory_select dependent signals
+  val sensory_select = csrs(LTCCore_CSRs.sensory_select)(0) // for convenience 
+  val n_neurons = Wire(chiselTypeOf(csrs(LTCCore_CSRs.n_neurons)))
+  when(sensory_select) {
+    io.state_addr := csrs(LTCCore_CSRs.sensory_state_addr)
+    io.n_neurons  := csrs(LTCCore_CSRs.sensory_n_neurons)
+    n_neurons     := csrs(LTCCore_CSRs.sensory_n_neurons)
+  }.otherwise{
+    io.state_addr := csrs(LTCCore_CSRs.state_addr)
+    io.n_neurons  := csrs(LTCCore_CSRs.n_neurons)
+    n_neurons     := csrs(LTCCore_CSRs.n_neurons)
+  }
+
 
   val first_fire_seen = RegInit(false.B)
   when (io.fire && !RegNext(io.fire)) {
@@ -607,7 +621,7 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
 
   // Counter logic
   val input_neuron_counter = RegInit(0.U(config.neuronCounterWidth.W))
-  when ((input_neuron_counter === (csrs(LTCCore_CSRs.n_neurons)-1.U)) || io.fire || pes_done) { 
+  when ((input_neuron_counter === (n_neurons-1.U)) || io.fire || pes_done) { 
     input_neuron_counter := 0.U
   }.elsewhen (enable) {
     input_neuron_counter := input_neuron_counter + 1.U
@@ -616,7 +630,7 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
   val out_neuron_counter = RegInit(0.U(config.neuronCounterWidth.W))
   when (io.fire || pes_done) { // NOTE: assumes will never overflow (as it never should, otherwise config is bad)
     out_neuron_counter := 0.U
-  }.elsewhen ((input_neuron_counter === (csrs(LTCCore_CSRs.n_neurons)-1.U)) && enable) {
+  }.elsewhen ((input_neuron_counter === (n_neurons-1.U)) && enable) {
     out_neuron_counter := out_neuron_counter + 1.U
   }
 
@@ -634,11 +648,12 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
   ltc_pes.foreach{u => 
     u.io.en := enable
     u.io.fire := fire_z1
+    u.io.sensory_select := sensory_select
     
     u.io.j := out_neuron_counter
     u.io.k := synapse_counter
     u.io.x_z1 := current_state
-    u.io.last_state := (input_neuron_counter === (csrs(LTCCore_CSRs.n_neurons)-1.U))
+    u.io.last_state := (input_neuron_counter === (n_neurons-1.U))
   }
 
   // PE outputs
@@ -684,6 +699,8 @@ class LTCPE(  val config  : LTCCoprocConfig, val peID : Int = -1
       val k           = Input(UInt(config.synapseCounterWidth.W))
       val fire        = Input(Bool())
 
+      val sensory_select = Input(Bool()) // true if sensory shall be considered, otherwise false
+
       val busy    = Output(Bool())
       val done    = Output(Bool())
 
@@ -712,17 +729,50 @@ class LTCPE(  val config  : LTCCoprocConfig, val peID : Int = -1
   sigmoid.io <> DontCare
 
   // CSR Registers instanciation and write
-  val N_out_neurons = RegEnable(
-    io.csr.csrWrite.bits, 0.U, 
-    io.csr.csrWrite.valid && io.csr.csrSel.valid && (io.csr.csrSel.bits === LTCPE_CSRs.n_out_neurons))
-  val result_act_addr = RegEnable(
-    io.csr.csrWrite.bits, 0.U, 
-    io.csr.csrWrite.valid && io.csr.csrSel.valid && (io.csr.csrSel.bits === LTCPE_CSRs.result_act_addr))
-  io.result_act_addr := result_act_addr
-  val result_rev_act_addr = RegEnable(
-    io.csr.csrWrite.bits, 0.U, 
-    io.csr.csrWrite.valid && io.csr.csrSel.valid && (io.csr.csrSel.bits === LTCPE_CSRs.result_rev_act_addr))
-  io.result_rev_act_addr := result_rev_act_addr
+  // val N_out_neurons = RegEnable(
+  //   io.csr.csrWrite.bits, 0.U, 
+  //   io.csr.csrWrite.valid && io.csr.csrSel.valid && (io.csr.csrSel.bits === LTCPE_CSRs.n_out_neurons))
+  // val result_act_addr = RegEnable(
+  //   io.csr.csrWrite.bits, 0.U, 
+  //   io.csr.csrWrite.valid && io.csr.csrSel.valid && (io.csr.csrSel.bits === LTCPE_CSRs.result_act_addr))
+  // val result_rev_act_addr = RegEnable(
+    //   io.csr.csrWrite.bits, 0.U, 
+    //   io.csr.csrWrite.valid && io.csr.csrSel.valid && (io.csr.csrSel.bits === LTCPE_CSRs.result_rev_act_addr))
+
+  // Init and write registers
+  var csrs : Map[LTCPE_CSRs.Type, UInt] = Map()
+  LTCPE_CSRs.all.foreach{
+    c => csrs += (c -> {
+                        if (LTCPE_CSRs.readOnlyCSRs.contains(c)) {
+                          Reg(chiselTypeOf(io.csr.csrRead)).suggestName("CSR_R_" + c.toString().split("=")(1).replaceAll("\\)", ""))
+                        } else {
+                          RegEnable(io.csr.csrWrite.bits, 0.U, 
+                          (io.csr.csrSel.bits === c) && io.csr.csrSel.valid && io.csr.csrWrite.valid).suggestName("CSR_W_" + c.toString().split("=")(1).replaceAll("\\)", ""))
+                        }
+                      })}
+  // read registers
+  LTCPE_CSRs.all.foreach{ c =>
+    when ((io.csr.csrSel.bits === c) && io.csr.csrSel.valid) {
+      io.csr.csrRead := csrs(c)
+    }
+  }
+
+  val N_out_neurons = Wire(chiselTypeOf(csrs(LTCPE_CSRs.n_out_neurons)))
+  val weight_mem_offset = Wire(chiselTypeOf(csrs(LTCPE_CSRs.sensory_weight_offset)))
+  val sparcity_mem_offset = Wire(chiselTypeOf(csrs(LTCPE_CSRs.sensory_sparcity_offset)))
+  when (io.sensory_select) {
+    N_out_neurons := csrs(LTCPE_CSRs.sensory_n_out_neurons)
+    io.result_act_addr := csrs(LTCPE_CSRs.sensory_result_act_addr)
+    io.result_rev_act_addr := csrs(LTCPE_CSRs.sensory_result_rev_act_addr)
+    weight_mem_offset   := csrs(LTCPE_CSRs.sensory_weight_offset)
+    sparcity_mem_offset := csrs(LTCPE_CSRs.sensory_sparcity_offset)
+  }.otherwise {
+    N_out_neurons := csrs(LTCPE_CSRs.n_out_neurons)
+    io.result_act_addr := csrs(LTCPE_CSRs.result_act_addr)
+    io.result_rev_act_addr := csrs(LTCPE_CSRs.result_rev_act_addr)
+    weight_mem_offset   := 0.U
+    sparcity_mem_offset := 0.U
+  }
 
   // memory definition
   var weight_mems : Map[LTCPE_WeightSel.Type, SyncReadMem[FixedPoint] ] = Map()
@@ -736,13 +786,13 @@ class LTCPE(  val config  : LTCCoprocConfig, val peID : Int = -1
     LTCPE_WeightSel.all.foreach{
     m => {
       when(io.memWrite.weight_write.bits.writeSelect === m) {
-        weight_mems(m)(io.memWrite.weight_write.bits.writeAddr) := io.memWrite.weight_write.bits.writeData.asFixedPoint(config.f.BP)
+        weight_mems(m)(io.memWrite.weight_write.bits.writeAddr + weight_mem_offset) := io.memWrite.weight_write.bits.writeData.asFixedPoint(config.f.BP)
         }
       }
     }
   }
   when(io.memWrite.sparcity_write.fire) {
-    sparcity_mem(io.memWrite.sparcity_write.bits.writeAddr) := io.memWrite.sparcity_write.bits.writeData
+    sparcity_mem(io.memWrite.sparcity_write.bits.writeAddr + sparcity_mem_offset) := io.memWrite.sparcity_write.bits.writeData
   }
 
   // event signals
@@ -760,7 +810,7 @@ class LTCPE(  val config  : LTCCoprocConfig, val peID : Int = -1
 
   // control logic
   val current_synapse_active = Wire(Bool())
-  current_synapse_active := sparcity_mem(io.k) 
+  current_synapse_active := sparcity_mem(io.k + sparcity_mem_offset) 
   val current_synapse_active_shrg = ShiftRegister(current_synapse_active, 5+MULT_LATENCY+sigmoid.LATENCY -1, io.en)
 
   val active_synaps_counter_next = RegInit(0.U(config.synapseCounterWidth.W))
@@ -773,7 +823,7 @@ class LTCPE(  val config  : LTCCoprocConfig, val peID : Int = -1
   }
 
   // weigth address propagaion
-  val mu_addr    = RegNext(active_synaps_counter) // TODO + sensory_weight_offset if sensory
+  val mu_addr    = RegNext(active_synaps_counter + weight_mem_offset)
   val gamma_addr = RegNext(mu_addr)
   val w_addr     = ShiftRegister(gamma_addr, 1+MULT_LATENCY+sigmoid.LATENCY)
   val Erev_addr  = ShiftRegister(w_addr, 1+(MULT_LATENCY-1))
@@ -833,17 +883,18 @@ class LTCPE(  val config  : LTCCoprocConfig, val peID : Int = -1
       printf("LTC PE output was missed!!!! \n")
     }
   }
+  csrs(LTCPE_CSRs.missed_out_values) := out_missed_count // NOTE: might be one cc delayed, but SW does not read immediatelly anyway
 
   // CSR Read
   // this is not the proper generic way to do this, but it is done like this for historical reasons
-  when (io.csr.csrSel.valid) {
-    switch (io.csr.csrSel.bits) {
-      is (LTCPE_CSRs.n_out_neurons) { io.csr.csrRead := N_out_neurons }
-      is (LTCPE_CSRs.missed_out_values) { io.csr.csrRead := out_missed_count }
-      is (LTCPE_CSRs.result_act_addr) { io.csr.csrRead := result_act_addr }
-      is (LTCPE_CSRs.result_rev_act_addr) { io.csr.csrRead := result_rev_act_addr }
-    }
-  }  
+  // when (io.csr.csrSel.valid) {
+  //   switch (io.csr.csrSel.bits) {
+  //     is (LTCPE_CSRs.n_out_neurons) { io.csr.csrRead := N_out_neurons }
+  //     is (LTCPE_CSRs.missed_out_values) { io.csr.csrRead := out_missed_count }
+  //     is (LTCPE_CSRs.result_act_addr) { io.csr.csrRead := result_act_addr }
+  //     is (LTCPE_CSRs.result_rev_act_addr) { io.csr.csrRead := result_rev_act_addr }
+  //   }
+  // }  
 
 }
 

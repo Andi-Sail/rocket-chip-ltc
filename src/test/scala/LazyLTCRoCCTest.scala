@@ -331,6 +331,8 @@ class LTCPE_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
   for {
     W <- Array(16,32)
     useFC <- Array(true, false)
+    // W <- Array(16)
+    // useFC <- Array(true)
   }
   {
     val F = W / 2
@@ -346,7 +348,10 @@ class LTCPE_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
     }
 
     // load model definition and weights
-    val (pes, ode_synapses, weigth_map, sparcity_matrix) = LTCTestDataUtil.ReadLTCModelFromHeader(header_file, F)
+    val (
+      n_neurons, ode_synapses, weigth_map, sparcity_matrix,
+      sensory_n_neurons, sensory_synapses, sensory_weigth_map, sensory_sparcity_matrix
+      ) = LTCTestDataUtil.ReadLTCModelFromHeader(header_file, F)
 
     // load rocc input and output values from json
     val ltc_rocc_values = LTCTestDataUtil.LoadLTCRoCCStimuli(json_file)
@@ -359,18 +364,48 @@ class LTCPE_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
         c.io.en.poke(false.B) // disable LTC PE
         c.io.j.poke(0.U)
         c.io.k.poke(0.U)
+        c.io.sensory_select.poke(false)
         c.clock.step()
 
+        // write N out neurons
+        LTCTestUtil.WritePE_CSR(c.io.csr, c.clock, LTCPE_CSRs.n_out_neurons, n_neurons.U)
+        
         val written_synapses = LTCTestUtil.WriteModelData2PE(c.io.csr, c.io.memWrite, c.clock, config,
-          pes, pes, weigth_map, sparcity_matrix)
+          n_neurons, n_neurons, weigth_map, sparcity_matrix)
         assert(written_synapses == ode_synapses, "Not all synapses written")
 
-        for (test_run <- 0 until ltc_rocc_values.size if (!ltc_rocc_values(test_run).keys.head.startsWith("sensory"))) // TODO: run sensory as well!
+        // write sensory
+        c.io.sensory_select.poke(true)
+        c.clock.step()
+        LTCTestUtil.WritePE_CSR(c.io.csr, c.clock, LTCPE_CSRs.sensory_n_out_neurons, n_neurons.U)
+        LTCTestUtil.WritePE_CSR(c.io.csr, c.clock, LTCPE_CSRs.sensory_sparcity_offset, (n_neurons*n_neurons).U)
+        LTCTestUtil.WritePE_CSR(c.io.csr, c.clock, LTCPE_CSRs.sensory_weight_offset, written_synapses.U)
+
+        val written_sensory_synapses = LTCTestUtil.WriteModelData2PE(c.io.csr, c.io.memWrite, c.clock, config,
+          sensory_n_neurons, n_neurons, sensory_weigth_map, sensory_sparcity_matrix)
+        assert(written_sensory_synapses == sensory_synapses, "Not all synapses written")
+
+        c.io.sensory_select.poke(false)
+        c.clock.step()
+
+        for (test_run <- 0 until ltc_rocc_values.size) 
         {
+          c.io.sensory_select.poke(false)
+          var key_prefix = ""
+          val n_out_neurons = n_neurons
+          var n_in_neurons = n_neurons
+          if (ltc_rocc_values(test_run).keys.head.startsWith("sensory")) {
+            key_prefix = "sensory_"
+            n_in_neurons = sensory_n_neurons
+            c.io.sensory_select.poke(true)
+          }
+          c.clock.step()
+
+
           println(s"fix_$F test - iteration $test_run")
-          val states = ltc_rocc_values(test_run)("states")
-          val rev_activation = ltc_rocc_values(test_run)("rev_activation")
-          val activation = ltc_rocc_values(test_run)("activation")
+          val states = ltc_rocc_values(test_run)(key_prefix + "states")
+          val rev_activation = ltc_rocc_values(test_run)(key_prefix + "rev_activation")
+          val activation = ltc_rocc_values(test_run)(key_prefix + "activation")
 
           // activate pe and feed some states
           c.io.en.poke(true)
@@ -385,10 +420,10 @@ class LTCPE_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
           // feed input
           fork {
             var k = 0
-            for (j <- 0 until pes)
+            for (j <- 0 until n_out_neurons)
             {
               c.io.j.poke(j)
-              for (i <- 0 until pes)
+              for (i <- 0 until n_in_neurons)
               {
                 c.io.k.poke(k)
                 if (i > 0) {
@@ -400,7 +435,7 @@ class LTCPE_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
                 }
 
                 fork {timescope{
-                  c.io.last_state.poke(i === (pes-1))
+                  c.io.last_state.poke(i === (n_in_neurons-1))
                   c.clock.step()
                 }}
       
@@ -410,16 +445,16 @@ class LTCPE_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
                 k += 1
               }
               if (dummy_counter_state) {
-                c.io.x_z1.poke(FixedPoint((pes), W.W, F.BP))
+                c.io.x_z1.poke(FixedPoint((n_in_neurons), W.W, F.BP))
               } else {
-                c.io.x_z1.poke(FixedPoint(states(pes-1), W.W, F.BP))
+                c.io.x_z1.poke(FixedPoint(states(n_in_neurons-1), W.W, F.BP))
               }
             }
             c.clock.step()
           } 
 
           c.io.pe_out.ready.poke(true) // Note: this test is always ready to recieve data
-          for (out_cnt <- 0 until pes)
+          for (out_cnt <- 0 until n_neurons)
           {
             while (!c.io.pe_out.valid.peekBoolean())
             {
@@ -453,11 +488,11 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
   println("preping test...")
 
   for {
-    W <- Array(16,32)
-    useFC <- Array(true, false)
+    // W <- Array(16,32)
+    // useFC <- Array(true, false)
     n_pes <- Array(1,4,5)
-    // W <- Array(16)
-    // useFC <- Array(true)
+    W <- Array(16)
+    useFC <- Array(true)
     // n_pes <- Array(1)
   }
   {
@@ -475,7 +510,10 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
 
 
     // load model definition and weights
-    val (pes, ode_synapses, weigth_map, sparcity_matrix) = LTCTestDataUtil.ReadLTCModelFromHeader(header_file, F)
+    val (
+      n_neurons, ode_synapses, weigth_map, sparcity_matrix,
+      sensory_n_neurons, sensory_synapses, sensory_weigth_map, sensory_sparcity_matrix
+    ) = LTCTestDataUtil.ReadLTCModelFromHeader(header_file, F)
 
     // load rocc input and output values from json
     val ltc_rocc_values = LTCTestDataUtil.LoadLTCRoCCStimuli(json_file)
@@ -490,31 +528,35 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
 
         // write Model config
         timescope {
-          c.io.csr.csrWrite.bits.poke(scala.math.ceil(pes.toDouble / config.N_PEs).toInt) 
+          c.io.csr.csrWrite.bits.poke(scala.math.ceil(n_neurons.toDouble / config.N_PEs).toInt) 
           c.io.csr.csrWrite.valid.poke(true)
           c.io.csr.csrSel.bits.poke(LTCCore_CSRs.max_out_neurons)
           c.io.csr.csrSel.valid.poke(true)
           c.clock.step()
         }
         timescope {
-          c.io.csr.csrWrite.bits.poke((pow(pes,2) / config.N_PEs).toInt)
+          c.io.csr.csrWrite.bits.poke((pow(n_neurons,2) / config.N_PEs).toInt)
           c.io.csr.csrWrite.valid.poke(true)
           c.io.csr.csrSel.bits.poke(LTCCore_CSRs.max_synapses)
           c.io.csr.csrSel.valid.poke(true)
           c.clock.step()
         }
         timescope {
-          c.io.csr.csrWrite.bits.poke(pes)
+          c.io.csr.csrWrite.bits.poke(n_neurons)
           c.io.csr.csrWrite.valid.poke(true)
           c.io.csr.csrSel.bits.poke(LTCCore_CSRs.n_neurons)
           c.io.csr.csrSel.valid.poke(true)
           c.clock.step()
         }
+        c.clock.step()
+        LTCTestUtil.WriteCore_CSR(c.io.csr, c.clock, LTCCore_CSRs.sensory_n_neurons, sensory_n_neurons.U)
 
         var written_synapses = 0
+        var written_sensory_synapses = 0
         var written_neurons = 0
-        val neurons_per_pe = blinag.DenseVector(Array.fill(config.N_PEs)(pes / config.N_PEs))
-        while (blinag.sum(neurons_per_pe) < pes) {
+        var written_sensory_neurons = 0
+        val neurons_per_pe = blinag.DenseVector(Array.fill(config.N_PEs)(n_neurons / config.N_PEs))
+        while (blinag.sum(neurons_per_pe) < n_neurons) {
           // find argmin of neurons_per_pe
           val i = blinag.argmin(neurons_per_pe)
           // add one
@@ -525,26 +567,60 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
         for (i <- 0 until config.N_PEs) {
           c.io.memWrite.PEAddr.poke(i)
           c.io.csr.PEAddr.poke(i)
+
+          LTCTestUtil.WriteCore_CSR(c.io.csr, c.clock, LTCCore_CSRs.sensory_select, 0.U)
+
+          // write N out neurons
+          LTCTestUtil.WritePE_CSR(c.io.csr.PECSR, c.clock, LTCPE_CSRs.n_out_neurons, neurons_per_pe(i).U)
+
           written_synapses += LTCTestUtil.WriteModelData2PE(c.io.csr.PECSR, c.io.memWrite.PEMemWrite, c.clock, config, 
-            pes, neurons_per_pe(i), 
+            n_neurons, neurons_per_pe(i), 
             weigth_map.view.mapValues(l => l.slice(written_synapses, l.length)).toMap,
             sparcity_matrix.map(_.slice(written_neurons, written_neurons+neurons_per_pe(i))))
           written_neurons += neurons_per_pe(i)
           c.clock.step()
-          println(s"now written $written_synapses synapses")
+          println(s"now written $written_synapses ode synapses")
+
+          // write sensory
+          LTCTestUtil.WriteCore_CSR(c.io.csr, c.clock, LTCCore_CSRs.sensory_select, 1.U)
+          LTCTestUtil.WritePE_CSR(c.io.csr.PECSR, c.clock, LTCPE_CSRs.sensory_n_out_neurons, neurons_per_pe(i).U)
+          LTCTestUtil.WritePE_CSR(c.io.csr.PECSR, c.clock, LTCPE_CSRs.sensory_sparcity_offset, (neurons_per_pe(i)*n_neurons).U)
+          LTCTestUtil.WritePE_CSR(c.io.csr.PECSR, c.clock, LTCPE_CSRs.sensory_weight_offset, written_synapses.U)
+          written_sensory_synapses += LTCTestUtil.WriteModelData2PE(c.io.csr.PECSR, c.io.memWrite.PEMemWrite, c.clock, config, 
+            sensory_n_neurons, neurons_per_pe(i), 
+            sensory_weigth_map.view.mapValues(l => l.slice(written_sensory_synapses, l.length)).toMap,
+            sensory_sparcity_matrix.map(_.slice(written_sensory_neurons, written_sensory_neurons+neurons_per_pe(i))))
+          written_sensory_neurons += neurons_per_pe(i)
+          c.clock.step()
+          println(s"now written $written_sensory_synapses sensory synapses")
         }
         assert(written_synapses == ode_synapses, "Not all synapses written")
-        assert(written_neurons  == pes, "Not all neurons written")
+        assert(written_neurons  == n_neurons, "Not all neurons written")
 
         println(s"written $written_synapses synapses")
         println(s"written $written_neurons neurons")
 
-        for (test_run <- 0 until ltc_rocc_values.size if (!ltc_rocc_values(test_run).keys.head.startsWith("sensory"))) // TODO: run sensory as well!
+        LTCTestUtil.WriteCore_CSR(c.io.csr, c.clock, LTCCore_CSRs.sensory_select, 0.U)
+
+        for (test_run <- 0 until ltc_rocc_values.size)
         {
+          var sensory_select = 0
+          var key_prefix = ""
+          val n_out_neurons = n_neurons
+          var n_in_neurons = n_neurons
+          if (ltc_rocc_values(test_run).keys.head.startsWith("sensory")) {
+            key_prefix = "sensory_"
+            n_in_neurons = sensory_n_neurons
+            sensory_select = 1
+          }
+          LTCTestUtil.WriteCore_CSR(c.io.csr, c.clock, LTCCore_CSRs.sensory_select, sensory_select.U)
+
+          c.clock.step()
+
           println(s"fix_$F test - iteration $test_run")
-          val states = ltc_rocc_values(test_run)("states")
-          val rev_activation = ltc_rocc_values(test_run)("rev_activation")
-          val activation = ltc_rocc_values(test_run)("activation")
+          val states = ltc_rocc_values(test_run)(key_prefix + "states")
+          val rev_activation = ltc_rocc_values(test_run)(key_prefix + "rev_activation")
+          val activation = ltc_rocc_values(test_run)(key_prefix + "activation")
 
           // feed states
           LTCTestUtil.WriteStates2Core(c.io.memWrite.stateWrite, c.clock, config, states)
@@ -560,7 +636,7 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
           fork{
             var outputs_checked = 0
             val outputs_checked_of_pe = Array.fill(config.N_PEs) {0}
-            while (outputs_checked < pes) {
+            while (outputs_checked < n_neurons) {
               c.io.data_out.ready.poke(false) // simulate memory busy for some random time
               c.clock.step(scala.util.Random.between(0,10))
               c.io.data_out.ready.poke(true) 

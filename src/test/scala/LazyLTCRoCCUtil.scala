@@ -13,6 +13,8 @@ import chisel3.util.Valid
 import freechips.rocketchip.tile.LTCCore_StateWrite
 import freechips.rocketchip.tile.LTCPE_CSRs_IO
 import freechips.rocketchip.tile.LTCPE_CSRs
+import freechips.rocketchip.tile.LTCCore_CSRs_IO
+import freechips.rocketchip.tile.LTCCore_CSRs
 
 /**
   * Utility functions to read test data
@@ -28,10 +30,12 @@ object LTCTestDataUtil {
     * @return touple holding values read
     */
   def ReadLTCModelFromHeader(headerFilePaht : String, F : Int): 
-    (Int, Int, Map[LTCPE_WeightSel.Type, List[Int]], Array[List[Int]]) = {
+    (Int, Int, Map[LTCPE_WeightSel.Type, List[Int]], Array[List[Int]], 
+     Int, Int, Map[LTCPE_WeightSel.Type, List[Int]], Array[List[Int]]) = {
     // load model definition from C-header file ("if it works it ain't stupit 🙃" - ChatGPT (probably))
     val cHeaderString: String = scala.io.Source.fromFile(headerFilePaht).mkString
-    val units = """(\d+)""".r.findFirstIn("""#define units (\d+)""".r.findFirstIn(cHeaderString).get).get.toInt
+
+    val n_neurons = """(\d+)""".r.findFirstIn("""#define units (\d+)""".r.findFirstIn(cHeaderString).get).get.toInt
     val ode_synapses = """(\d+)""".r.findFirstIn("""#define ode_synapses (\d+)""".r.findFirstIn(cHeaderString).get).get.toInt
     val rnn_ltc_cell_sigma_0_sparse = s"fix${F}_t rnn_ltc_cell_sigma_0_sparse\\[${ode_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
     val rnn_ltc_cell_mu_0_sparse    = s"fix${F}_t rnn_ltc_cell_mu_0_sparse\\[${ode_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
@@ -44,11 +48,31 @@ object LTCTestDataUtil {
       LTCPE_WeightSel.erev  -> rnn_ltc_cell_erev_0_sparse,
     )
     // NOTE: sparcity_matrix is not transposed!!!!
-    val sparcity_matrix = s"adjacency_matrix\\[${units}\\]\\[${units}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString)
+    val sparcity_matrix = s"adjacency_matrix\\[${n_neurons}\\]\\[${n_neurons}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString)
     .map{m => m.group(1)}.get.split("""\},\{""")
     .map{s => s.replace("""{""", "").replace("""}""", "").split(',').map(x => abs(x.trim.toInt)).toList}
 
-    return (units, ode_synapses, weigth_map, sparcity_matrix)
+    val sensory_n_neurons = """(\d+)""".r.findFirstIn("""#define input_dim (\d+)""".r.findFirstIn(cHeaderString).get).get.toInt
+    val sensory_synapses = """(\d+)""".r.findFirstIn("""#define sensory_synapses (\d+)""".r.findFirstIn(cHeaderString).get).get.toInt
+    val sensory_rnn_ltc_cell_sigma_0_sparse = s"fix${F}_t rnn_ltc_cell_sensory_sigma_0_sparse\\[${sensory_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
+    val sensory_rnn_ltc_cell_mu_0_sparse    = s"fix${F}_t rnn_ltc_cell_sensory_mu_0_sparse\\[${sensory_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
+    val sensory_rnn_ltc_cell_w_0_sparse     = s"fix${F}_t rnn_ltc_cell_sensory_w_0_sparse\\[${sensory_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
+    val sensory_rnn_ltc_cell_erev_0_sparse  = s"fix${F}_t rnn_ltc_cell_sensory_erev_0_sparse\\[${sensory_synapses}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString).map{m => m.group(1)}.get.split(',').map(_.trim.toInt).toList
+    val sensory_weigth_map = Map(
+      LTCPE_WeightSel.gamma -> sensory_rnn_ltc_cell_sigma_0_sparse,
+      LTCPE_WeightSel.mu    -> sensory_rnn_ltc_cell_mu_0_sparse,
+      LTCPE_WeightSel.w     -> sensory_rnn_ltc_cell_w_0_sparse,
+      LTCPE_WeightSel.erev  -> sensory_rnn_ltc_cell_erev_0_sparse,
+    )
+    // NOTE: sparcity_matrix is not transposed!!!!
+    val sensory_sparcity_matrix = s"adjacency_matrix\\[${sensory_n_neurons}\\]\\[${n_neurons}\\] = \\{(.*?)\\};".r.findFirstMatchIn(cHeaderString)
+    .map{m => m.group(1)}.get.split("""\},\{""")
+    .map{s => s.replace("""{""", "").replace("""}""", "").split(',').map(x => abs(x.trim.toInt)).toList}
+
+    return (
+      n_neurons, ode_synapses, weigth_map, sparcity_matrix, 
+      sensory_n_neurons, sensory_synapses, sensory_weigth_map, sensory_sparcity_matrix
+    )
   }
 
   /**
@@ -75,28 +99,56 @@ object LTCTestDataUtil {
 object LTCTestUtil {
 
   /**
+    * Writes a value to a specific PE CSR
+    *
+    * @param io_csr the PE CSR io interface
+    * @param clock the dut clock
+    * @param csr_id the ID of the CSR to write
+    * @param csr_value the value to write to the CSR
+    */
+  def WritePE_CSR(io_csr : LTCPE_CSRs_IO, clock : Clock, csr_id: LTCPE_CSRs.Type, csr_value : UInt) {
+      io_csr.csrWrite.bits.poke(csr_value)
+      io_csr.csrWrite.valid.poke(true)
+      io_csr.csrSel.bits.poke(csr_id)
+      io_csr.csrSel.valid.poke(true)
+      clock.step()
+      io_csr.csrSel.valid.poke(false)
+      io_csr.csrWrite.valid.poke(false)
+      clock.step()
+  }
+
+    /**
+    * Writes a value to a specific Core CSR
+    *
+    * @param io_csr the Core CSR io interface
+    * @param clock the dut clock
+    * @param csr_id the ID of the CSR to write
+    * @param csr_value the value to write to the CSR
+    */
+  def WriteCore_CSR(io_csr : LTCCore_CSRs_IO, clock : Clock, csr_id: LTCCore_CSRs.Type, csr_value : UInt) {
+      io_csr.csrWrite.bits.poke(csr_value)
+      io_csr.csrWrite.valid.poke(true)
+      io_csr.csrSel.bits.poke(csr_id)
+      io_csr.csrSel.valid.poke(true)
+      clock.step()
+      io_csr.csrSel.valid.poke(false)
+      io_csr.csrWrite.valid.poke(false)
+      clock.step()
+  }
+
+  /**
     * Write (i.e. poke) LTC weights and model data to LTC PE
     *
     * @param mem_if memory interface of LTC PE
     * @param clock clock of LTC PE
     * @param config coprocessor config
-    * @param N_in_neurons model param - number of input neurons for this pe (usually total number of pes)
+    * @param N_in_neurons model param - number of input neurons for this pe (usually total number of neurons)
     * @param N_out_neurons number of output neurons for this pe (must be <= N_in_neurons)
     * @param weigth_map model weights
     * @param sparcity_matrix model sparcity matrix
     */
   def WriteModelData2PE(csr : LTCPE_CSRs_IO, mem_if : LTCPE_MemoryWriteIF, clock : Clock, config : LTCCoprocConfig,
   N_in_neurons : Int, N_out_neurons : Int, weigth_map : Map[LTCPE_WeightSel.Type, List[Int]], sparcity_matrix : Array[List[Int]]) : Int = {
-
-        // write N out neurons
-        csr.csrWrite.bits.poke(N_out_neurons)
-        csr.csrWrite.valid.poke(true)
-        csr.csrSel.bits.poke(LTCPE_CSRs.n_out_neurons)
-        csr.csrSel.valid.poke(true)
-        clock.step()
-        csr.csrSel.valid.poke(false)
-        csr.csrWrite.valid.poke(false)
-        clock.step()
 
         val out_neurons_fanint = Array.fill(N_out_neurons)(0)
         var total_active_synapses = 0
