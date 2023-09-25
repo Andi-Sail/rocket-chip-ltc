@@ -202,11 +202,16 @@ class LTCCore_MemoryWriteIF(val config : LTCCoprocConfig) extends Bundle {
   val stateWrite = Flipped(Valid(new LTCCore_StateWrite(config)))
 }
 
+object LTCPE_ErrorCSRBits {
+  val synapse_counter_overflow = 0
+}
+
 object LTCPE_CSRs extends ChiselEnum {
   val n_out_neurons, missed_out_values, result_act_addr, result_rev_act_addr,
-      sensory_n_out_neurons, sensory_weight_offset, sensory_sparcity_offset, sensory_result_act_addr, sensory_result_rev_act_addr = Value
+      sensory_n_out_neurons, sensory_weight_offset, sensory_sparcity_offset, sensory_result_act_addr, sensory_result_rev_act_addr,
+      pe_error_reg = Value
   val readOnlyCSRs = List(
-    missed_out_values
+    missed_out_values, pe_error_reg
   )
 
   // TODO: should generate header file for code
@@ -216,11 +221,18 @@ object LTCPE_CSRs extends ChiselEnum {
   }
 }
 
+object LTCCore_ErrorCSRBits {
+  val input_neuron_counter_overflow = 0
+  val out_neuron_counter_overflow = 1
+  val synapse_counter_overflow = 2
+}
+
 object LTCCore_CSRs extends ChiselEnum {
   val n_neurons, max_synapses, max_out_neurons, state_addr, n_pes, enable,
-      sensory_n_neurons, sensory_state_addr, sensory_select = Value
+      sensory_n_neurons, sensory_state_addr, sensory_select,
+      core_error_reg = Value
   val readOnlyCSRs = List(
-    n_pes
+    n_pes, core_error_reg
     // TODO: maybe add other interesting config params
   )
 
@@ -268,8 +280,8 @@ object LTCCoProc_FuncDef {
   println(s"#define FUNC_load_weight   $load_weight")
   println(s"#define FUNC_get_core_csr  $get_core_csr")
   println(s"#define FUNC_set_core_csr  $set_core_csr")
-  println(s"#define FUNC_get_pe_csr  $get_pe_csr")
-  println(s"#define FUNC_set_pe_csr  $set_pe_csr")
+  println(s"#define FUNC_get_pe_csr    $get_pe_csr")
+  println(s"#define FUNC_set_pe_csr    $set_pe_csr")
 
 
 
@@ -491,6 +503,27 @@ class LTCCoProc(outer: LTCCoProcRoCC, config : LTCCoprocConfig)(implicit p: Para
     }
   }
 
+  if (config.DEBUG) {
+    // check for memory_read_counter overflow
+    switch (state) {
+      is (s_load_state) {
+        when ((memory_read_counter >> core.io.memWrite.stateWrite.bits.stateAddr.getWidth).orR) {
+          printf("Memory read Error: Overflow in stateWrite!!! \n")
+        }
+      } 
+      is (s_load_sparcity) {
+        when ((memory_read_counter >> core.io.memWrite.PEMemWrite.sparcity_write.bits.writeAddr.getWidth).orR) {
+          printf(cf"Memory read Error: Overflow in PEMemWrite!!! for PE $mem_write_pe_addr \n")
+        }
+      }
+      is (s_load_weight) {
+        when ((memory_read_counter >> core.io.memWrite.PEMemWrite.weight_write.bits.writeAddr.getWidth).orR) {
+          printf(cf"Memory read Error: Overflow in PEMemWrite!!! for PE $mem_write_pe_addr \n")
+        }
+      }
+    }
+  }
+
   // --- connecting memory request interface ---
   io.mem.req.valid := mem_req_valid
   io.mem.req.bits.addr := current_memory_addr
@@ -625,6 +658,12 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
     input_neuron_counter := 0.U
   }.elsewhen (enable) {
     input_neuron_counter := input_neuron_counter + 1.U
+    if (config.DEBUG) {
+      when(input_neuron_counter.andR) {
+        csrs(LTCCore_CSRs.core_error_reg) := (csrs(LTCCore_CSRs.core_error_reg) | (1.U << LTCCore_ErrorCSRBits.input_neuron_counter_overflow))
+        printf("Overflow Error: input_neuron_counter overflow!!! \n")
+      }
+    }
   }
   
   val out_neuron_counter = RegInit(0.U(config.neuronCounterWidth.W))
@@ -632,6 +671,12 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
     out_neuron_counter := 0.U
   }.elsewhen ((input_neuron_counter === (n_neurons-1.U)) && enable) {
     out_neuron_counter := out_neuron_counter + 1.U
+    if (config.DEBUG) {
+      when(out_neuron_counter.andR) {
+        csrs(LTCCore_CSRs.core_error_reg) := (csrs(LTCCore_CSRs.core_error_reg) | (1.U << LTCCore_ErrorCSRBits.out_neuron_counter_overflow))
+        printf("Overflow Error: out_neuron_counter overflow!!! \n")
+      }
+    }
   }
 
   val synapse_counter = RegInit(0.U(config.synapseCounterWidth.W))
@@ -639,6 +684,12 @@ class LTCCore(config : LTCCoprocConfig) extends Module {
     synapse_counter := 0.U
   }.elsewhen (enable) {
     synapse_counter := synapse_counter + 1.U
+    if (config.DEBUG) {
+      when(synapse_counter.andR) {
+        csrs(LTCCore_CSRs.core_error_reg) := (csrs(LTCCore_CSRs.core_error_reg) | (1.U << LTCCore_ErrorCSRBits.synapse_counter_overflow))
+        printf("Overflow Error: synapse_counter overflow!!! \n")
+      }
+    }
   }
 
   // PE Inputs
@@ -728,17 +779,6 @@ class LTCPE(  val config  : LTCCoprocConfig, val peID : Int = -1
   io <> DontCare
   sigmoid.io <> DontCare
 
-  // CSR Registers instanciation and write
-  // val N_out_neurons = RegEnable(
-  //   io.csr.csrWrite.bits, 0.U, 
-  //   io.csr.csrWrite.valid && io.csr.csrSel.valid && (io.csr.csrSel.bits === LTCPE_CSRs.n_out_neurons))
-  // val result_act_addr = RegEnable(
-  //   io.csr.csrWrite.bits, 0.U, 
-  //   io.csr.csrWrite.valid && io.csr.csrSel.valid && (io.csr.csrSel.bits === LTCPE_CSRs.result_act_addr))
-  // val result_rev_act_addr = RegEnable(
-    //   io.csr.csrWrite.bits, 0.U, 
-    //   io.csr.csrWrite.valid && io.csr.csrSel.valid && (io.csr.csrSel.bits === LTCPE_CSRs.result_rev_act_addr))
-
   // Init and write registers
   var csrs : Map[LTCPE_CSRs.Type, UInt] = Map()
   LTCPE_CSRs.all.foreach{
@@ -820,6 +860,13 @@ class LTCPE(  val config  : LTCCoprocConfig, val peID : Int = -1
   }.elsewhen (current_synapse_active && io.en) {
     // inc counter, assuming overflow is impossible
     active_synaps_counter_next := active_synaps_counter_next + 1.U
+    if (config.DEBUG) {
+      // csrs(LTCPE_CSRs.pe_error_reg) := synapse_counter_overflow.asUInt
+      when (active_synaps_counter_next.andR) {
+        csrs(LTCPE_CSRs.pe_error_reg) := (csrs(LTCPE_CSRs.pe_error_reg) | (1.U << LTCPE_ErrorCSRBits.synapse_counter_overflow))
+        printf("Overflow Error: active_synaps_counter counter overflow in PE $peID!!! \n")
+      }
+    }
   }
 
   // weigth address propagaion
@@ -884,18 +931,6 @@ class LTCPE(  val config  : LTCCoprocConfig, val peID : Int = -1
     }
   }
   csrs(LTCPE_CSRs.missed_out_values) := out_missed_count // NOTE: might be one cc delayed, but SW does not read immediatelly anyway
-
-  // CSR Read
-  // this is not the proper generic way to do this, but it is done like this for historical reasons
-  // when (io.csr.csrSel.valid) {
-  //   switch (io.csr.csrSel.bits) {
-  //     is (LTCPE_CSRs.n_out_neurons) { io.csr.csrRead := N_out_neurons }
-  //     is (LTCPE_CSRs.missed_out_values) { io.csr.csrRead := out_missed_count }
-  //     is (LTCPE_CSRs.result_act_addr) { io.csr.csrRead := result_act_addr }
-  //     is (LTCPE_CSRs.result_rev_act_addr) { io.csr.csrRead := result_rev_act_addr }
-  //   }
-  // }  
-
 }
 
 class HardSigmoid(val config : LTCCoprocConfig) extends Module {

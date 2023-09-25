@@ -219,6 +219,7 @@ class LTCPE_Datapath_test extends AnyFlatSpec with ChiselScalatestTester {
   }
 }
 
+// Note: this does not test the setup with sensory
 class LTCPE_Setup_test extends AnyFlatSpec with ChiselScalatestTester {
   
   behavior of "LTCPE"
@@ -488,11 +489,11 @@ class LTCCore_Inference_test extends AnyFlatSpec with ChiselScalatestTester {
   println("preping test...")
 
   for {
-    // W <- Array(16,32)
-    // useFC <- Array(true, false)
+    W <- Array(16,32)
+    useFC <- Array(true, false)
     n_pes <- Array(1,4,5)
-    W <- Array(16)
-    useFC <- Array(true)
+    // W <- Array(16)
+    // useFC <- Array(true)
     // n_pes <- Array(1)
   }
   {

@@ -133,3 +133,6 @@ class LTCConfig_LargeMem_W16F8_medium extends Config(new LTCConfigFPU(new LTCCop
 class LTCConfig_LargeMem_W16F8_large  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_PEs=4, ramBlockArrdWidth=14)))
 class LTCConfig_LargeMem_W16F8_huge  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=16,f=8,N_PEs=16, ramBlockArrdWidth=14)))
 
+class LTCConfig_TinyMem_W32F16_small  extends Config(new LTCConfigFPU(new LTCCoprocConfig(w=32,f=16,N_PEs=1, ramBlockArrdWidth=3, maxNeurons = 8)))
+
+
