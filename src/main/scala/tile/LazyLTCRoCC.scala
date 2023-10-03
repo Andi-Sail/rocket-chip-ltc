@@ -148,6 +148,7 @@ class LTCCoprocConfig(
 
   val DEBUG : Boolean = true
 )  { 
+  // TODO: should incorperate information from sensory synapses as well
   val neuronCounterWidth = log2Ceil(maxNeurons)
   val maxSynapses = pow(maxNeurons, 2).toInt
   val synapseCounterWidth = log2Ceil(maxSynapses)
